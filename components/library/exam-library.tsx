@@ -1,0 +1,257 @@
+"use client";
+
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  BarChart3,
+  BookOpen,
+  Globe,
+  RefreshCw,
+  Search,
+  Target,
+  Upload,
+} from "lucide-react";
+import { ExamCard } from "./exam-card";
+import { ScrapeModal } from "./scrape-modal";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { PROVIDER_OPTIONS } from "@/lib/providers";
+import type { ExamSummary } from "@/lib/types";
+
+export function ExamLibrary() {
+  const [exams, setExams] = useState<ExamSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [scrapeOpen, setScrapeOpen] = useState(false);
+  const [resumeTarget, setResumeTarget] = useState<ExamSummary | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const fetchExams = useCallback(async () => {
+    try {
+      const res = await fetch("/api/exams");
+      const data: ExamSummary[] = await res.json();
+      setExams(data);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchExams();
+  }, [fetchExams]);
+
+  const handleDelete = (id: string) => {
+    setExams((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  const handleResume = (exam: ExamSummary) => {
+    setResumeTarget(exam);
+    setScrapeOpen(true);
+  };
+
+  const handleNewScrape = () => {
+    setResumeTarget(null);
+    setScrapeOpen(true);
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+      const json = JSON.parse(text);
+      const res = await fetch("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(json),
+      });
+      if (res.ok) await fetchExams();
+      else alert("Import failed: invalid exam file.");
+    } catch {
+      alert("Import failed: could not parse file.");
+    }
+    e.target.value = "";
+  };
+
+  // ── Filtering ───────────────────────────────────────────────────────────────
+  const filtered = exams.filter((e) => {
+    const matchSearch =
+      !search ||
+      e.examCode.toLowerCase().includes(search.toLowerCase()) ||
+      e.provider.toLowerCase().includes(search.toLowerCase());
+    const matchProvider =
+      providerFilter === "all" || e.provider === providerFilter;
+    return matchSearch && matchProvider;
+  });
+
+  const usedProviders = [...new Set(exams.map((e) => e.provider))];
+
+  // ── Aggregate analytics ──────────────────────────────────────────────────────
+  const totalQuestions = exams.reduce((s, e) => s + e.fetchedCount, 0);
+  const totalAnswered = exams.reduce((s, e) => s + e.answeredCount, 0);
+  const totalCorrect = exams.reduce((s, e) => s + e.correctCount, 0);
+  const overallAccuracy =
+    totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : null;
+
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center gap-2 text-muted-foreground">
+        <RefreshCw className="h-5 w-5 animate-spin" />
+        <span>Loading library…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* ── Analytics stats bar ── */}
+      {exams.length > 0 && (
+        <div className="flex flex-wrap items-center gap-6 rounded-xl border border-border/60 bg-muted/20 px-5 py-3 text-sm">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-primary" />
+            <span className="text-muted-foreground">
+              <span className="font-semibold text-foreground">
+                {exams.length}
+              </span>{" "}
+              {exams.length === 1 ? "exam" : "exams"}
+            </span>
+          </div>
+          <Separator orientation="vertical" className="h-4" />
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-primary" />
+            <span className="text-muted-foreground">
+              <span className="font-semibold text-foreground">
+                {totalQuestions.toLocaleString()}
+              </span>{" "}
+              questions total
+            </span>
+          </div>
+          <Separator orientation="vertical" className="h-4" />
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-primary" />
+            <span className="text-muted-foreground">
+              <span className="font-semibold text-foreground">
+                {totalAnswered.toLocaleString()}
+              </span>{" "}
+              answered
+            </span>
+          </div>
+          {overallAccuracy !== null && (
+            <>
+              <Separator orientation="vertical" className="h-4" />
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">
+                  Overall accuracy:{" "}
+                  <span
+                    className={
+                      overallAccuracy >= 80
+                        ? "font-semibold text-emerald-500"
+                        : overallAccuracy >= 60
+                        ? "font-semibold text-amber-500"
+                        : "font-semibold text-red-500"
+                    }
+                  >
+                    {overallAccuracy}%
+                  </span>
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Toolbar ── */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            className="pl-8"
+            placeholder="Search exams…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+
+        <Select value={providerFilter} onValueChange={setProviderFilter}>
+          <SelectTrigger className="w-44">
+            <SelectValue placeholder="All providers" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All providers</SelectItem>
+            {usedProviders.map((p) => (
+              <SelectItem key={p} value={p} className="capitalize">
+                {p}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Button variant="outline" size="sm" onClick={() => importRef.current?.click()}>
+          <Upload className="mr-1 h-4 w-4" />
+          Import
+        </Button>
+        <input
+          ref={importRef}
+          type="file"
+          accept=".json"
+          className="hidden"
+          onChange={handleImport}
+        />
+
+        <Button size="sm" onClick={handleNewScrape}>
+          <Globe className="mr-1 h-4 w-4" />
+          New Scrape
+        </Button>
+      </div>
+
+      {/* ── Grid ── */}
+      {filtered.length === 0 ? (
+        <div className="flex h-64 flex-col items-center justify-center gap-4 rounded-xl border border-dashed text-muted-foreground">
+          <p className="text-sm">
+            {exams.length === 0
+              ? "No exams yet. Scrape your first exam to get started."
+              : "No exams match your filter."}
+          </p>
+          {exams.length === 0 && (
+            <Button onClick={handleNewScrape}>
+              <Globe className="mr-1 h-4 w-4" />
+              New Scrape
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {filtered.map((exam) => (
+            <ExamCard
+              key={exam.id}
+              exam={exam}
+              onDelete={handleDelete}
+              onResume={handleResume}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Scrape modal ── */}
+      <ScrapeModal
+        open={scrapeOpen}
+        onOpenChange={(o) => {
+          setScrapeOpen(o);
+          if (!o) setResumeTarget(null);
+        }}
+        onComplete={fetchExams}
+        resumeExamId={resumeTarget?.id}
+        resumeProvider={resumeTarget?.provider}
+        resumeExamCode={resumeTarget?.examCode}
+      />
+    </div>
+  );
+}
