@@ -132,11 +132,13 @@ export function parseQuestion(
   ) as HTMLElement | null;
 
   // Hard guard: a missing .question-body is the clearest signal that the page
-  // is a CF challenge or a layout change. Log loudly so it shows up in DevTools.
+  // is a CF challenge or a layout change. THROW so the retry loop in use-scraper
+  // can catch it as a parse error and fast-fail (no retry). Without the throw the
+  // function would silently return an empty-body question and save it to disk.
   if (!questionEl) {
-    console.error(
-      `[parser] Parse Failed: Missing .question-body${tag}. ` +
-        "This is likely a Cloudflare challenge page or a DOM layout change."
+    throw new Error(
+      `[parser] question element not found${tag}: ` +
+        "Missing .question-body > .card-text — likely a Cloudflare challenge page or a DOM layout change."
     );
   }
 
@@ -240,21 +242,18 @@ export function parseQuestion(
     comments = Array.from(
       doc.getElementsByClassName("comment-container")
     ).map((e) => {
-      const dateEl = e.getElementsByClassName(
-        "comment-date"
-      )[0] as HTMLElement | undefined;
+      // querySelector is faster than repeated getElementsByClassName calls
+      // because it short-circuits on first match rather than collecting all.
+      const dateEl = e.querySelector(".comment-date") as HTMLElement | null;
       const parsed = new Date(dateEl?.title ?? "");
 
       const voteCount = Number(
-        e.getElementsByClassName("upvote-count")[0]?.textContent?.trim()
+        e.querySelector(".upvote-count")?.textContent?.trim()
       );
 
       const content =
-        (
-          e.getElementsByClassName("comment-content")[0] as
-            | HTMLElement
-            | undefined
-        )?.innerHTML ?? "";
+        (e.querySelector(".comment-content") as HTMLElement | null)
+          ?.innerHTML ?? "";
 
       return {
         date: isNaN(parsed.valueOf()) ? undefined : parsed.toISOString(),

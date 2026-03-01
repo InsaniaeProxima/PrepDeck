@@ -57,7 +57,7 @@ export function ScrapeModal({
   const [examCode, setExamCode] = useState(resumeExamCode ?? "");
   const [manualProvider, setManualProvider] = useState("");
   const [batchSize, setBatchSize] = useState(10);
-  const [sleepDuration, setSleepDuration] = useState(500);
+  const [sleepDuration, setSleepDuration] = useState(100);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);

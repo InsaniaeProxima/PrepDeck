@@ -68,6 +68,11 @@ export function useScraper() {
       stoppedRef.current = false;
       const examId = existingExamId ?? uuidv4();
 
+      // ── Start resume check early — runs concurrently with link collection ─
+      // The network round-trip for the existing exam overlaps with the link
+      // collection phase so we don't pay for it sequentially.
+      const resumeCheckPromise = fetch(`/api/exams/${examId}`).catch(() => null);
+
       // ── Step 1: Collect all question links ───────────────────────────────
       onEvent({
         type: "phase",
@@ -96,6 +101,7 @@ export function useScraper() {
           (_, i) => pageIndex + i
         );
 
+        const linksBatchStart = Date.now();
         const batchLinks = await Promise.all(
           pageNums.map((p) =>
             extractDiscussionLinks(provider, p, examCode).catch((err) => {
@@ -115,44 +121,61 @@ export function useScraper() {
         onEvent({ type: "links_progress", fetched: end, total: totalPages });
 
         if (end < totalPages && !stoppedRef.current && sleepDuration > 0) {
-          await sleep(sleepDuration);
+          const linksElapsed = Date.now() - linksBatchStart;
+          const linksRemaining = sleepDuration - linksElapsed;
+          if (linksRemaining > 0) {
+            await sleep(linksRemaining);
+          }
         }
       }
 
-      // ── Retry failed discussion pages once ───────────────────────────────
-      // After the main batch loop, give each failed page one more chance with
-      // a 3-second delay. Recovered links are appended to allLinks before
+      // ── Retry failed discussion pages once (parallel) ────────────────────
+      // All failed pages are retried concurrently with a shared 3-second
+      // initial delay, so total retry time is 3s regardless of how many
+      // pages failed. Recovered links are appended to allLinks before
       // deduplication so nothing is silently lost.
       if (failedPageNums.length > 0 && !stoppedRef.current) {
         onEvent({
           type: "phase",
           phase: "links",
-          message: `Retrying ${failedPageNums.length} failed discussion page(s)…`,
+          message: `Retrying ${failedPageNums.length} failed discussion page(s) in parallel…`,
         });
         const permanentlyFailedPages: number[] = [];
-        for (const p of failedPageNums) {
-          if (stoppedRef.current) break;
-          onEvent({
-            type: "phase",
-            phase: "links",
-            message: `Retrying links page ${p}…`,
-          });
-          await sleep(3_000);
-          let retryLinks: string[] = [];
-          try {
-            retryLinks = await extractDiscussionLinks(provider, p, examCode);
-            onEvent({
-              type: "phase",
-              phase: "links",
-              message: `Links page ${p} recovered: ${retryLinks.length} link(s).`,
-            });
-          } catch (retryErr) {
-            const msg = `Links page ${p} failed after retry — questions on this page will be missing. Error: ${String(retryErr)}`;
-            console.error(`[scraper] ${msg}`);
-            onEvent({ type: "error", message: msg });
-            permanentlyFailedPages.push(p);
-          }
-          allLinks.push(...retryLinks);
+        const retryResults = await Promise.all(
+          failedPageNums.map(async (p) => {
+            if (stoppedRef.current) return [] as string[];
+            onEvent({ type: "phase", phase: "links", message: `Retrying discussion page ${p}…` });
+            await sleep(3_000);
+            // Re-check after the sleep: the user may have clicked Stop while we were waiting.
+            if (stoppedRef.current) return [] as string[];
+            try {
+              const links = await extractDiscussionLinks(provider, p, examCode);
+              onEvent({
+                type: "phase",
+                phase: "links",
+                message: `Links page ${p} recovered: ${links.length} link(s).`,
+              });
+              return links;
+            } catch (retryErr) {
+              const retryMsg = String(retryErr).toLowerCase();
+              const isRateLimit =
+                retryMsg.includes("429") ||
+                retryMsg.includes("rate") ||
+                retryMsg.includes("too many");
+              if (isRateLimit) {
+                onEvent({ type: "phase", phase: "links", message: `Rate limit on page ${p} retry — waiting extra 7s…` });
+                await sleep(7_000);
+              }
+              const msg = `Links page ${p} failed after retry — questions on this page will be missing. Error: ${String(retryErr)}`;
+              console.error(`[scraper] ${msg}`);
+              onEvent({ type: "error", message: msg });
+              permanentlyFailedPages.push(p);
+              return [] as string[];
+            }
+          })
+        );
+        for (const links of retryResults) {
+          allLinks.push(...links);
         }
         if (permanentlyFailedPages.length > 0 && !stoppedRef.current) {
           onEvent({
@@ -189,16 +212,12 @@ export function useScraper() {
       }
 
       // ── Resume: determine which links have already been saved ─────────────
-      // Load the existing exam (if any) and build a set of already-saved
-      // question paths. Any link whose path is in this set is skipped.
-      // This correctly handles skipped questions: they were never saved, so
-      // they remain in pendingLinks and will be retried.
+      // Await the resume check that was started concurrently with link
+      // collection — the response is already in-flight (or done) by now.
       let pendingLinks = uniqueLinks;
       let resumeOffset = 0;
 
-      const existingRes = await fetch(`/api/exams/${examId}`).catch(
-        () => null
-      );
+      const existingRes = await resumeCheckPromise;
       if (existingRes?.ok) {
         try {
           const existingExam = await existingRes.json();
@@ -214,30 +233,6 @@ export function useScraper() {
           }
         } catch {
           // Non-fatal — treat as a fresh start.
-        }
-      }
-
-      // ── Initialize the exam record on the server ──────────────────────────
-      // First append call creates the exam JSON if it doesn't exist yet;
-      // on resume it simply updates totalLinks.
-      // Check res.ok here — a 4xx/5xx means the record was never created, so
-      // every subsequent batch-save would also fail silently.  Surface this
-      // immediately so the user knows to retry.
-      {
-        const initRes = await fetch(`/api/exams/${examId}/append`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider,
-            examCode,
-            questions: [],
-            totalLinks,
-          }),
-        });
-        if (!initRes.ok) {
-          throw new Error(
-            `Failed to initialise exam record: HTTP ${initRes.status} ${initRes.statusText}`
-          );
         }
       }
 
@@ -278,6 +273,7 @@ export function useScraper() {
           return examId;
         }
 
+        const qBatchStart = Date.now();
         const batchLinks = pendingLinks.slice(offset, offset + batchSize);
 
         console.log(
@@ -300,14 +296,41 @@ export function useScraper() {
                 const parsed = parseQuestion(doc, link);
                 return { ...parsed, url: `${ORIGIN_BASE}${link}` };
               } catch (err) {
+                const msg = String(err).toLowerCase();
+                // Parsing errors are deterministic — retrying won't help.
+                // Fast-fail immediately without sleeping or burning retry slots.
+                const isParseError = [
+                  "parse",
+                  "selector",
+                  "cannot read",
+                  "null",
+                  "question element",
+                ].some((k) => msg.includes(k));
+                if (isParseError) {
+                  onEvent({
+                    type: "error",
+                    message: `Parse error (no retry) for ${link}: ${String(err)}`,
+                  });
+                  return null;
+                }
+                // Rate-limit signals get a 3× longer backoff.
+                // All checks use msg (already .toLowerCase()) for consistent
+                // case-insensitive matching — "Too Many" vs "too many", etc.
+                const isRateLimit =
+                  msg.includes("429") ||
+                  msg.includes("rate") ||
+                  msg.includes("too many");
+                const backoffMs = isRateLimit
+                  ? BACKOFF[attempt] * 3
+                  : BACKOFF[attempt];
                 lastErr = err;
                 onEvent({
                   type: "error",
                   message: `Retry ${attempt + 1} for ${link} in ${
-                    BACKOFF[attempt] / 1_000
+                    backoffMs / 1_000
                   }s – ${String(err)}`,
                 });
-                await sleep(BACKOFF[attempt]);
+                await sleep(backoffMs);
               }
             }
 
@@ -377,7 +400,10 @@ export function useScraper() {
             fetch(`/api/exams/${examId}/append`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ questions: fetched }),
+              // Always include provider/examCode so the server can create the
+              // exam record on the first real batch (init POST was removed).
+              // totalLinks lets the server keep its metadata up to date.
+              body: JSON.stringify({ provider, examCode, questions: fetched, totalLinks }),
             })
               .then((res) => {
                 if (!res.ok) throw new Error(`Save HTTP ${res.status} ${res.statusText}`);
@@ -396,9 +422,13 @@ export function useScraper() {
 
         const isLastBatch = offset + batchLinks.length >= pendingLinks.length;
         if (!isLastBatch && sleepDuration > 0 && !stoppedRef.current) {
-          // Sleep runs in parallel with any in-flight append — both happen
-          // concurrently so neither adds to the other's latency.
-          await sleep(sleepDuration);
+          // Adaptive sleep: only wait for the remaining time after the batch
+          // already consumed some of the target interval.
+          const qElapsed = Date.now() - qBatchStart;
+          const qRemaining = sleepDuration - qElapsed;
+          if (qRemaining > 0) {
+            await sleep(qRemaining);
+          }
         }
       }
 

@@ -85,7 +85,8 @@ export async function POST(
   }
 
   // ── Update mutable metadata ─────────────────────────────────────────────────
-  if (totalLinks !== undefined) {
+  // Only assign if changed to avoid unnecessary JSON dirty-marking.
+  if (totalLinks !== undefined && exam.totalLinks !== totalLinks) {
     exam.totalLinks = totalLinks;
   }
 
@@ -95,12 +96,21 @@ export async function POST(
     // Idempotency guard: skip any question whose URL already exists in the
     // exam so that crash-recovery re-fetches and double-batch edge cases
     // never produce duplicate records.
-    const existingUrls = new Set<string>(
-      exam.questions
-        .map((q) => q.url)
-        .filter((url): url is string => Boolean(url))
-    );
-    const deduped = sanitized.filter((q) => !q.url || !existingUrls.has(q.url));
+    // Build the dedup Set lazily — on a fresh exam (0 existing questions)
+    // there is nothing to compare against so we skip the allocation entirely.
+    const deduped =
+      exam.questions.length === 0
+        ? sanitized
+        : (() => {
+            const existingUrls = new Set<string>(
+              exam.questions
+                .map((q) => q.url)
+                .filter((url): url is string => Boolean(url))
+            );
+            return sanitized.filter(
+              (q) => !q.url || !existingUrls.has(q.url)
+            );
+          })();
     exam.questions.push(...deduped);
   }
 
