@@ -33,7 +33,8 @@ function sanitizeQuestion(q: Question): Question {
     body: sanitizeHTML(q.body),
     answerDescription: sanitizeHTML(q.answerDescription),
     options: q.options?.map((o) => sanitizeHTML(o)),
-    comments: q.comments.map((c) => ({
+    // Guard against imported questions where `comments` may be absent.
+    comments: (q.comments ?? []).map((c) => ({
       ...c,
       content: sanitizeHTML(c.content),
     })),
@@ -91,7 +92,16 @@ export async function POST(
   // ── Sanitize and append new questions ──────────────────────────────────────
   if (incomingQuestions.length > 0) {
     const sanitized = incomingQuestions.map(sanitizeQuestion);
-    exam.questions.push(...sanitized);
+    // Idempotency guard: skip any question whose URL already exists in the
+    // exam so that crash-recovery re-fetches and double-batch edge cases
+    // never produce duplicate records.
+    const existingUrls = new Set<string>(
+      exam.questions
+        .map((q) => q.url)
+        .filter((url): url is string => Boolean(url))
+    );
+    const deduped = sanitized.filter((q) => !q.url || !existingUrls.has(q.url));
+    exam.questions.push(...deduped);
   }
 
   exam.fetchedCount = exam.questions.length;

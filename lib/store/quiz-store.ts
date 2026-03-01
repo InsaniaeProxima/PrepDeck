@@ -1,8 +1,11 @@
 "use client";
 
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { shuffle, isCorrect, parseAnswerLetters } from "@/lib/utils";
-import type { Exam, Question, SessionConfig, ExamProgress } from "@/lib/types";
+import { applyRating } from "@/lib/srs";
+import type { SRSRating } from "@/lib/srs";
+import type { Exam, Question, SessionConfig, ExamProgress, SRSCard } from "@/lib/types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +27,24 @@ interface QuizState {
   // Whether the quiz is active
   active: boolean;
 
+  // ── Exam Mode ──────────────────────────────────────────────────────────────
+  isExamMode: boolean;
+  examSubmitted: boolean;
+  examSecondsRemaining: number;
+  examStartedAt: number | null;
+  examScore: {
+    correct: number;
+    total: number;
+    percent: number;
+    passed: boolean;
+  } | null;
+
+  // ── SRS ──────────────────────────────────────────────────────────────────
+  /** SRS card data keyed by exam question index, loaded from progress on session start */
+  srsData: Record<number, SRSCard>;
+  /** Tracks which sessionIndex values have already been SRS-rated in this session */
+  srsRatedThisReveal: Set<number>;
+
   // ── Actions ────────────────────────────────────────────────────────────────
   loadExam: (exam: Exam, progress: ExamProgress | null) => void;
   startSession: (config: SessionConfig) => void;
@@ -36,6 +57,9 @@ interface QuizState {
   setSetupOpen: (open: boolean) => void;
   saveProgress: () => Promise<void>;
   reset: () => void;
+  submitExam: () => void;
+  tickExam: () => void;
+  rateSRS: (rating: SRSRating) => void;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -44,7 +68,8 @@ function buildSession(
   questions: Question[],
   config: SessionConfig,
   userAnswers: Map<number, string>,
-  flaggedSet: Set<number>
+  flaggedSet: Set<number>,
+  srsData: Record<number, SRSCard>
 ): Question[] {
   // 1. Filter
   let pool = questions.map((q, i) => ({ q, i }));
@@ -56,12 +81,33 @@ function buildSession(
     });
   } else if (config.filter === "flagged") {
     pool = pool.filter(({ i }) => flaggedSet.has(i));
+  } else if (config.filter === "srs_due") {
+    // IMPORTANT: use local-timezone date, NOT toISOString() which is UTC.
+    // SRS due dates are stored by todayISO() in lib/srs.ts using local time.
+    // Mixing UTC (toISOString) with local-tz dates causes cards rated near
+    // midnight to appear due on the wrong day depending on UTC offset.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    pool = pool.filter(({ i }) => {
+      const card = srsData[i];
+      return card !== undefined && card.dueDate <= today;
+    });
   }
 
-  // 2. Shuffle
+  // 2. Sort by topic then index (only when not randomizing)
+  if (!config.randomize) {
+    pool.sort((a, b) => {
+      const pad = (v: string | undefined) => (v ?? "0").padStart(5, "0");
+      const aKey = `${pad(a.q.topic)}-${pad(a.q.index)}`;
+      const bKey = `${pad(b.q.topic)}-${pad(b.q.index)}`;
+      return aKey.localeCompare(bKey);
+    });
+  }
+
+  // 3. Shuffle
   if (config.randomize) pool = shuffle(pool);
 
-  // 3. Limit count
+  // 4. Limit count
   if (config.count !== "all") {
     pool = pool.slice(0, config.count);
   }
@@ -81,6 +127,17 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   setupOpen: false,
   active: false,
 
+  // ── Exam mode initial state ─────────────────────────────────────────────────
+  isExamMode: false,
+  examSubmitted: false,
+  examSecondsRemaining: 0,
+  examStartedAt: null,
+  examScore: null,
+
+  // ── SRS initial state ───────────────────────────────────────────────────────
+  srsData: {},
+  srsRatedThisReveal: new Set(),
+
   loadExam(exam, progress) {
     const userAnswers = new Map<number, string>(
       Object.entries(progress?.userAnswers ?? {}).map(([k, v]) => [
@@ -89,27 +146,31 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       ])
     );
     const flagged = new Set<number>(progress?.flagged ?? []);
+    const srsData: Record<number, SRSCard> = progress?.srs ?? {};
     set({
       exam,
       userAnswers,
       flagged,
+      srsData,
       sessionIndex: 0,
       revealed: new Set(),
       sessionQuestions: [],
       active: false,
       setupOpen: true,
+      srsRatedThisReveal: new Set(),
     });
   },
 
   startSession(config) {
-    const { exam, userAnswers, flagged } = get();
+    const { exam, userAnswers, flagged, srsData } = get();
     if (!exam) return;
 
     const sessionQuestions = buildSession(
       exam.questions,
       config,
       userAnswers,
-      flagged
+      flagged,
+      srsData
     );
 
     set({
@@ -118,6 +179,13 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       revealed: new Set(),
       active: true,
       setupOpen: false,
+      srsRatedThisReveal: new Set(),
+      // ── Exam mode initialization ──
+      isExamMode: config.isExamMode,
+      examSubmitted: false,
+      examSecondsRemaining: config.isExamMode ? config.examDurationSeconds : 0,
+      examStartedAt: config.isExamMode ? Date.now() : null,
+      examScore: null,
     });
   },
 
@@ -154,7 +222,10 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   },
 
   revealAnswer() {
-    const { sessionIndex } = get();
+    const { sessionIndex, isExamMode, examSubmitted } = get();
+    // Block reveal during active exam (before submission)
+    if (isExamMode && !examSubmitted) return;
+
     set((s) => {
       const r = new Set(s.revealed);
       r.add(sessionIndex);
@@ -201,21 +272,112 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   },
 
   async saveProgress() {
-    const { exam, userAnswers, flagged } = get();
+    // Read all required state in a single get() call so the snapshot is
+    // consistent — avoids a second get() that could observe a different
+    // sessionIndex if state mutated between calls.
+    const { exam, userAnswers, flagged, sessionIndex } = get();
     if (!exam) return;
 
     const body = {
       examId: exam.id,
       userAnswers: Object.fromEntries(userAnswers),
       flagged: [...flagged],
-      lastSessionIndex: get().sessionIndex,
+      lastSessionIndex: sessionIndex,
     };
 
-    await fetch(`/api/progress/${exam.id}`, {
+    const res = await fetch(`/api/progress/${exam.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+
+    if (!res.ok) {
+      throw new Error(`Failed to save progress: HTTP ${res.status} ${res.statusText}`);
+    }
+  },
+
+  rateSRS(rating) {
+    const { exam, sessionQuestions, sessionIndex, srsData } = get();
+    if (!exam) return;
+
+    const q = sessionQuestions[sessionIndex];
+    if (!q) return;
+    const examIdx = exam.questions.indexOf(q);
+    if (examIdx === -1) return;
+
+    // Prevent double-rating: guard by sessionIndex (not examIdx)
+    if (get().srsRatedThisReveal.has(sessionIndex)) return;
+
+    const currentCard = srsData[examIdx];
+    const updatedCard = applyRating(currentCard, rating);
+
+    // Update local state
+    set((s) => {
+      const newSrs = { ...s.srsData, [examIdx]: updatedCard };
+      const newRated = new Set(s.srsRatedThisReveal);
+      newRated.add(s.sessionIndex);
+      return { srsData: newSrs, srsRatedThisReveal: newRated };
+    });
+
+    // Persist to server (fire-and-forget)
+    fetch(`/api/progress/${exam.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ questionIndex: examIdx, card: updatedCard }),
+    }).catch((err) => {
+      console.error("[srs] Failed to save SRS rating:", err);
+    });
+  },
+
+  submitExam() {
+    const { exam, sessionQuestions, userAnswers, isExamMode } = get();
+    if (!exam || !isExamMode) return;
+
+    // Calculate score
+    let correct = 0;
+    const total = sessionQuestions.length;
+
+    sessionQuestions.forEach((q) => {
+      const examIdx = exam.questions.indexOf(q);
+      const chosen = userAnswers.get(examIdx);
+      if (chosen !== undefined && isCorrect(q, chosen)) {
+        correct++;
+      }
+    });
+
+    const percent = total > 0 ? Math.round((correct / total) * 100) : 0;
+    const passed = percent >= 82;
+
+    // Reveal ALL session questions at once for review mode
+    const allRevealed = new Set<number>();
+    for (let i = 0; i < total; i++) {
+      allRevealed.add(i);
+    }
+
+    set({
+      examSubmitted: true,
+      examScore: { correct, total, percent, passed },
+      revealed: allRevealed,
+    });
+
+    // Save progress after submission
+    get().saveProgress().catch((err) => {
+      console.error("[quiz] Failed to save progress after exam submission:", err);
+    });
+  },
+
+  tickExam() {
+    const { isExamMode, examSubmitted, examSecondsRemaining } = get();
+    if (!isExamMode || examSubmitted) return;
+
+    const next = examSecondsRemaining - 1;
+    if (next <= 0) {
+      // Time's up — auto-submit
+      set({ examSecondsRemaining: 0 });
+      get().submitExam();
+    } else {
+      set({ examSecondsRemaining: next });
+    }
   },
 
   reset() {
@@ -228,6 +390,15 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       flagged: new Set(),
       setupOpen: false,
       active: false,
+      // ── Exam mode reset ──
+      isExamMode: false,
+      examSubmitted: false,
+      examSecondsRemaining: 0,
+      examStartedAt: null,
+      examScore: null,
+      // ── SRS reset ──
+      srsData: {},
+      srsRatedThisReveal: new Set(),
     });
   },
 }));
@@ -240,17 +411,52 @@ export const useIsRevealed = () =>
   useQuizStore((s) => s.revealed.has(s.sessionIndex));
 
 export const useUserAnswer = () => {
-  const { exam, sessionQuestions, sessionIndex, userAnswers } = useQuizStore();
-  const q = sessionQuestions[sessionIndex];
-  if (!q || !exam) return undefined;
-  const examIdx = exam.questions.indexOf(q);
-  return userAnswers.get(examIdx);
+  // Use a selector that extracts only the four fields we need so this hook
+  // does NOT re-render on every unrelated state mutation (e.g. examSecondsRemaining
+  // ticking every second during exam mode).
+  return useQuizStore((s) => {
+    const q = s.sessionQuestions[s.sessionIndex];
+    if (!q || !s.exam) return undefined;
+    const examIdx = s.exam.questions.indexOf(q);
+    return s.userAnswers.get(examIdx);
+  });
 };
 
 export const useIsFlagged = () => {
-  const { exam, sessionQuestions, sessionIndex, flagged } = useQuizStore();
-  const q = sessionQuestions[sessionIndex];
-  if (!q || !exam) return false;
-  const examIdx = exam.questions.indexOf(q);
-  return flagged.has(examIdx);
+  // Same rationale as useUserAnswer — scoped selector prevents re-renders from
+  // unrelated state changes (timer ticks, etc.).
+  return useQuizStore((s) => {
+    const q = s.sessionQuestions[s.sessionIndex];
+    if (!q || !s.exam) return false;
+    const examIdx = s.exam.questions.indexOf(q);
+    return s.flagged.has(examIdx);
+  });
 };
+
+// useShallow is required here because the selector returns a new object literal
+// on every call. Without it Zustand uses Object.is on the returned reference,
+// which is always false (new object each time), causing a re-render on every
+// single store mutation — including the examSecondsRemaining tick every second.
+// useShallow compares the returned object's values shallowly so only genuine
+// field changes trigger a re-render.
+export const useExamMode = () =>
+  useQuizStore(
+    useShallow((s) => ({
+      isExamMode: s.isExamMode,
+      examSubmitted: s.examSubmitted,
+      examSecondsRemaining: s.examSecondsRemaining,
+      examStartedAt: s.examStartedAt,
+      examScore: s.examScore,
+    }))
+  );
+
+export const useSRSCard = () =>
+  useQuizStore((s) => {
+    const q = s.sessionQuestions[s.sessionIndex];
+    if (!q || !s.exam) return undefined;
+    const examIdx = s.exam.questions.indexOf(q);
+    return s.srsData[examIdx];
+  });
+
+export const useSRSRated = () =>
+  useQuizStore((s) => s.srsRatedThisReveal.has(s.sessionIndex));

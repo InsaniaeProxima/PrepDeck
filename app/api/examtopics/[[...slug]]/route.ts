@@ -27,8 +27,9 @@ export async function GET(
   const { slug } = await params;
   const path = slug?.join("/") ?? "";
 
-  // Reject path traversal and non-URL characters.
-  if (path.includes("..") || /[^a-zA-Z0-9/_\-.~]/.test(path)) {
+  // Reject path traversal. The SSRF guard below (hostname check) is the real
+  // security boundary; we only need to block ".." here.
+  if (path.includes("..")) {
     return new Response("Invalid path", { status: 400 });
   }
 
@@ -46,22 +47,28 @@ export async function GET(
     return new Response("Forbidden", { status: 403 });
   }
 
-  const upstream = await fetch(url, {
-    // Bypass Next.js fetch caching — every proxy request must be live.
-    cache: "no-store",
-    headers: {
-      // Request compressed responses; reduces transfer size ~70–80%.
-      "Accept-Encoding": "gzip, deflate, br",
-      // Keep the TCP connection alive for subsequent requests in this process.
-      Connection: "keep-alive",
-      // Minimal browser-realistic headers so the server responds normally.
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    },
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, {
+      // Bypass Next.js fetch caching — every proxy request must be live.
+      cache: "no-store",
+      headers: {
+        // Request compressed responses; reduces transfer size ~70–80%.
+        "Accept-Encoding": "gzip, deflate, br",
+        // Keep the TCP connection alive for subsequent requests in this process.
+        Connection: "keep-alive",
+        // Minimal browser-realistic headers so the server responds normally.
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+  } catch (err) {
+    console.error("[proxy] Upstream fetch error:", err);
+    return new Response("Upstream unreachable", { status: 502 });
+  }
 
   // CRITICAL: do NOT forward Content-Encoding to the browser.
   // Node.js fetch auto-decompresses gzip/brotli bodies before exposing

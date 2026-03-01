@@ -1,7 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 import { saveExam } from "@/lib/storage/json-storage";
-import type { Exam } from "@/lib/types";
+import { sanitizeHTML } from "@/lib/security/sanitize";
+import type { Exam, Question } from "@/lib/types";
+
+function sanitizeQuestion(q: Question): Question {
+  return {
+    ...q,
+    body: sanitizeHTML(q.body),
+    answerDescription: sanitizeHTML(q.answerDescription),
+    options: q.options?.map((o) => sanitizeHTML(o)),
+    comments: (q.comments ?? []).map((c) => ({
+      ...c,
+      content: sanitizeHTML(c.content),
+    })),
+  };
+}
 
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -25,7 +39,7 @@ export async function POST(req: NextRequest) {
     fetchedCount: raw.fetchedCount ?? raw.questions.length,
     createdAt: raw.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    questions: raw.questions,
+    questions: raw.questions.map(sanitizeQuestion),
   };
 
   await saveExam(exam);

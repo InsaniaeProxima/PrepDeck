@@ -35,14 +35,55 @@ function getParser(): DOMParser {
  *  - A bare ExamTopics path: "/discussions/microsoft/1"
  *  - A full proxy path:      "/api/examtopics/discussions/microsoft/1"
  *
- * Throws on any non-2xx response status.
+ * Throws on any non-2xx response status or if the request stalls beyond
+ * `timeoutMs` milliseconds (default: 30 seconds). The timeout is enforced
+ * via AbortController so the underlying TCP connection is cancelled cleanly.
  */
-export async function fetchPage(path: string): Promise<Document> {
+export async function fetchPage(
+  path: string,
+  timeoutMs = 30_000
+): Promise<Document> {
   const url = path.startsWith("/api/") ? path : `${PROXY_BASE}${path}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} — ${path}`);
+
+  const controller = new AbortController();
+  const timerId = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Keep timerId active through the full response body read — a server can
+  // stream response headers immediately but trickle the body over minutes.
+  // Clearing the timer after fetch() resolves (headers only) would let the
+  // body read run unbounded.  We clear in a single finally that wraps the
+  // entire headers + body sequence.
+  let res: Response;
+  let html: string;
+  try {
+    try {
+      res = await fetch(url, { signal: controller.signal });
+    } catch (err) {
+      // Re-throw with a more descriptive message when aborted due to timeout.
+      if (controller.signal.aborted) {
+        throw new Error(`Timeout after ${timeoutMs}ms — ${path}`);
+      }
+      throw err;
+    }
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText} — ${path}`);
+    }
+
+    try {
+      html = await res.text();
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`Timeout reading body after ${timeoutMs}ms — ${path}`);
+      }
+      throw new Error(
+        `Failed to read response body — ${path}: ${String(err)}`
+      );
+    }
+  } finally {
+    // Always cancel the timer — prevents it firing after the function returns.
+    clearTimeout(timerId);
   }
-  const html = await res.text();
+
   return getParser().parseFromString(html, "text/html");
 }

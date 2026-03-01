@@ -9,7 +9,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { sanitizeHTML } from "@/lib/security/sanitize-client";
-import { formatDate } from "@/lib/utils";
+import { formatDate, proxyImageUrls } from "@/lib/utils";
 import type { Comment } from "@/lib/types";
 
 interface DiscussionPanelProps {
@@ -52,7 +52,7 @@ export function DiscussionPanel({ comments }: DiscussionPanelProps) {
                 <div
                   className="prose prose-sm prose-invert max-w-none [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/50 [&_pre]:p-3 [&_code]:text-purple-300"
                   dangerouslySetInnerHTML={{
-                    __html: sanitizeHTML(comment.content),
+                    __html: sanitizeHTML(proxyImageUrls(comment.content)),
                   }}
                 />
               </div>

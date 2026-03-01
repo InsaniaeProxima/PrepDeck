@@ -8,12 +8,23 @@ import { useQuizStore } from "@/lib/store/quiz-store";
  *   ← / ArrowLeft    → previous question
  *   → / ArrowRight   → next question
  *   1-5 / A-E        → select answer option
- *   R                → reveal answer
+ *   R                → reveal answer (no-op during active exam)
  *   F                → toggle flag
  */
 export function KeyboardHandler() {
-  const { goNext, goPrev, selectAnswer, revealAnswer, toggleFlag, active } =
-    useQuizStore();
+  // Use scoped selectors so this component does NOT re-render on every
+  // unrelated state change.  Destructuring useQuizStore() with no selector
+  // subscribes to the whole store; during exam mode that means a re-render
+  // every second (examSecondsRemaining tick), which is wasteful even though
+  // the useEffect dep array correctly gates on isExamMode/examSubmitted only.
+  const goNext = useQuizStore((s) => s.goNext);
+  const goPrev = useQuizStore((s) => s.goPrev);
+  const selectAnswer = useQuizStore((s) => s.selectAnswer);
+  const revealAnswer = useQuizStore((s) => s.revealAnswer);
+  const toggleFlag = useQuizStore((s) => s.toggleFlag);
+  const active = useQuizStore((s) => s.active);
+  const isExamMode = useQuizStore((s) => s.isExamMode);
+  const examSubmitted = useQuizStore((s) => s.examSubmitted);
 
   useEffect(() => {
     if (!active) return;
@@ -23,6 +34,9 @@ export function KeyboardHandler() {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
+      // Note: Keyboard shortcuts for answer options stop at E (keys 1-5 / A-E).
+      // F is reserved for flag toggle. Options F/G/H (rare, mostly Cisco/Microsoft
+      // drag-and-drop converted questions) must be selected by click/tap.
       switch (e.key) {
         case "ArrowLeft":
           e.preventDefault();
@@ -59,7 +73,10 @@ export function KeyboardHandler() {
           break;
         case "r":
         case "R":
-          revealAnswer();
+          // Block reveal during active exam (before submission)
+          if (!(isExamMode && !examSubmitted)) {
+            revealAnswer();
+          }
           break;
         case "f":
         case "F":
@@ -70,7 +87,7 @@ export function KeyboardHandler() {
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [active, goNext, goPrev, selectAnswer, revealAnswer, toggleFlag]);
+  }, [active, goNext, goPrev, selectAnswer, revealAnswer, toggleFlag, isExamMode, examSubmitted]);
 
   return null;
 }

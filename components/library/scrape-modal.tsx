@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useLayoutEffect } from "react";
 import { Loader2, Play, RefreshCw, Settings2, Wifi } from "lucide-react";
 import {
   Dialog,
@@ -13,6 +13,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -22,7 +23,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 import { PROVIDER_OPTIONS } from "@/lib/providers";
 import { useScraper } from "@/lib/scraper/use-scraper";
 import type { ScrapeEvent } from "@/lib/types";
@@ -54,8 +55,9 @@ export function ScrapeModal({
 }: ScrapeModalProps) {
   const [provider, setProvider] = useState(resumeProvider ?? "");
   const [examCode, setExamCode] = useState(resumeExamCode ?? "");
-  const [batchSize, setBatchSize] = useState(5);
-  const [sleepDuration, setSleepDuration] = useState(2000);
+  const [manualProvider, setManualProvider] = useState("");
+  const [batchSize, setBatchSize] = useState(10);
+  const [sleepDuration, setSleepDuration] = useState(500);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -63,8 +65,46 @@ export function ScrapeModal({
   const [qProgress, setQProgress] = useState({ fetched: 0, total: 0 });
   const logId = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Tracks the previous value of `open` so the reset effect only fires on the
+  // false → true transition, not on every dep change while the modal is open.
+  const prevOpenRef = useRef(false);
+
+  const effectiveProvider =
+    provider === "__other__" ? manualProvider.trim() : provider;
+  const isManualValid =
+    provider !== "__other__" || /^[a-z0-9-]+$/.test(manualProvider.trim());
 
   const scraper = useScraper();
+
+  // Reset transient state on the false → true transition of `open` so that a
+  // previously completed scrape (done === true) does not block the resume
+  // button on subsequent opens. Also re-syncs provider/examCode from props in
+  // case the modal component was not unmounted between opens (Dialog keeps it
+  // mounted).
+  //
+  // useLayoutEffect (not useEffect) is intentional: we need the state reset to
+  // be flushed synchronously before the browser paints. useEffect runs *after*
+  // paint, which causes a one-frame flash where the old "Close" button is
+  // visible before it flips back to "Resume Fetching".
+  //
+  // The prevOpenRef guard is critical: without it the effect fires on EVERY
+  // dep change, including parent re-renders that happen while the modal is
+  // already open (e.g. Zustand store updates). Without the guard those
+  // re-renders would clobber any text the user has already typed into the
+  // provider/examCode inputs.
+  useLayoutEffect(() => {
+    if (open && !prevOpenRef.current) {
+      setDone(false);
+      setRunning(false);
+      setLog([]);
+      setLinksProgress({ fetched: 0, total: 0 });
+      setQProgress({ fetched: 0, total: 0 });
+      setProvider(resumeProvider ?? "");
+      setExamCode(resumeExamCode ?? "");
+      setManualProvider("");
+    }
+    prevOpenRef.current = open;
+  }, [open, resumeProvider, resumeExamCode]);
 
   const addLog = useCallback(
     (message: string, type: LogEntry["type"] = "info") => {
@@ -127,7 +167,7 @@ export function ScrapeModal({
 
   // ── Start ──────────────────────────────────────────────────────────────────
   const handleStart = async () => {
-    if (!provider || !examCode.trim()) return;
+    if (!effectiveProvider || !isManualValid || !examCode.trim()) return;
     setRunning(true);
     setDone(false);
     setLog([]);
@@ -136,7 +176,7 @@ export function ScrapeModal({
 
     try {
       await scraper.start(
-        provider,
+        effectiveProvider,
         examCode.trim(),
         handleEvent,
         resumeExamId,
@@ -150,9 +190,15 @@ export function ScrapeModal({
   };
 
   // ── Stop ───────────────────────────────────────────────────────────────────
+  // Do NOT call setRunning(false) here. scraper.stop() sets the stop flag but
+  // scraper.start() is still executing: it must finish await appendChain (the
+  // write-queue drain) before it returns. setRunning(false) is owned exclusively
+  // by the finally block in handleStart, which only fires after start() returns.
+  // Calling setRunning(false) here early would re-enable the Start button while
+  // a flush is still writing to disk, allowing a second scrape to launch on the
+  // same examId and causing concurrent JSON writes.
   const handleStop = () => {
     scraper.stop();
-    setRunning(false);
     addLog("Stopped by user.", "warn");
   };
 
@@ -197,8 +243,24 @@ export function ScrapeModal({
                     {p.label}
                   </SelectItem>
                 ))}
+                <SelectSeparator />
+                <SelectItem value="__other__">Other (enter manually)</SelectItem>
               </SelectContent>
             </Select>
+            {provider === "__other__" && (
+              <Input
+                placeholder="e.g. palo-alto-networks"
+                value={manualProvider}
+                onChange={(e) => setManualProvider(e.target.value.toLowerCase())}
+                disabled={running}
+                className={cn(
+                  "mt-1.5",
+                  manualProvider.trim() && !isManualValid
+                    ? "border-red-500 focus-visible:ring-red-500"
+                    : ""
+                )}
+              />
+            )}
           </div>
           <div className="space-y-1.5">
             <Label>Exam Code</Label>
@@ -228,7 +290,7 @@ export function ScrapeModal({
                 </div>
                 <Slider
                   min={1}
-                  max={15}
+                  max={20}
                   step={1}
                   value={[batchSize]}
                   onValueChange={([v]) => setBatchSize(v)}
@@ -245,7 +307,7 @@ export function ScrapeModal({
                   <span className="font-medium text-primary">{(sleepDuration / 1000).toFixed(1)}s</span>
                 </div>
                 <Slider
-                  min={500}
+                  min={0}
                   max={10000}
                   step={250}
                   value={[sleepDuration]}
@@ -289,26 +351,27 @@ export function ScrapeModal({
 
         {/* Log */}
         {log.length > 0 && (
-          <ScrollArea className="h-48 rounded-md border bg-black/40 p-3">
-            <div ref={scrollRef} className="space-y-0.5 font-mono text-xs">
-              {log.map((entry) => (
-                <div
-                  key={entry.id}
-                  className={
-                    entry.type === "error"
-                      ? "text-red-400"
-                      : entry.type === "success"
-                      ? "text-emerald-400"
-                      : entry.type === "warn"
-                      ? "text-amber-400"
-                      : "text-muted-foreground"
-                  }
-                >
-                  <span className="opacity-50">[{entry.ts}]</span> {entry.message}
-                </div>
-              ))}
-            </div>
-          </ScrollArea>
+          <div
+            ref={scrollRef}
+            className="h-48 overflow-y-auto rounded-md border bg-black/40 p-3 space-y-0.5 font-mono text-xs"
+          >
+            {log.map((entry) => (
+              <div
+                key={entry.id}
+                className={
+                  entry.type === "error"
+                    ? "text-red-400"
+                    : entry.type === "success"
+                    ? "text-emerald-400"
+                    : entry.type === "warn"
+                    ? "text-amber-400"
+                    : "text-muted-foreground"
+                }
+              >
+                <span className="opacity-50">[{entry.ts}]</span> {entry.message}
+              </div>
+            ))}
+          </div>
         )}
 
         {/* Actions */}
@@ -334,7 +397,7 @@ export function ScrapeModal({
           ) : (
             <Button
               onClick={handleStart}
-              disabled={!provider || !examCode.trim()}
+              disabled={!effectiveProvider || !isManualValid || !examCode.trim()}
             >
               {resumeExamId ? (
                 <RefreshCw className="mr-1 h-4 w-4" />

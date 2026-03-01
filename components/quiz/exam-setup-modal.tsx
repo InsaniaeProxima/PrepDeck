@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { BookOpen, Flame, Flag, Shuffle } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { BookOpen, Clock, Flame, Flag, RefreshCw, Shuffle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +22,7 @@ interface ExamSetupModalProps {
   exam: Exam | null;
   mistakesCount: number;
   flaggedCount: number;
+  srsDueCount: number;
   onStart: (config: SessionConfig) => void;
 }
 
@@ -49,6 +50,12 @@ const FILTER_OPTIONS: {
     icon: <Flag className="h-4 w-4" />,
     description: "Questions you bookmarked",
   },
+  {
+    value: "srs_due",
+    label: "Due for Review",
+    icon: <RefreshCw className="h-4 w-4" />,
+    description: "Spaced repetition — questions due today",
+  },
 ];
 
 export function ExamSetupModal({
@@ -56,12 +63,25 @@ export function ExamSetupModal({
   exam,
   mistakesCount,
   flaggedCount,
+  srsDueCount,
   onStart,
 }: ExamSetupModalProps) {
   const [filter, setFilter] = useState<SessionFilter>("all");
   const [randomize, setRandomize] = useState(false);
   const [count, setCount] = useState<number | "all">("all");
   const [useCustomCount, setUseCustomCount] = useState(false);
+  const [isExamMode, setIsExamMode] = useState(false);
+
+  // When exam mode is toggled on, force specific settings.
+  // This must be before the early return to satisfy rules-of-hooks.
+  useEffect(() => {
+    if (isExamMode) {
+      setFilter("all");
+      setRandomize(true);
+      setUseCustomCount(true);
+      setCount(Math.min(100, exam?.questions.length ?? 100));
+    }
+  }, [isExamMode, exam?.questions.length]);
 
   if (!exam) return null;
 
@@ -70,7 +90,11 @@ export function ExamSetupModal({
       ? exam.questions.length
       : filter === "mistakes"
       ? mistakesCount
-      : flaggedCount;
+      : filter === "flagged"
+      ? flaggedCount
+      : filter === "srs_due"
+      ? srsDueCount
+      : exam.questions.length;
 
   const maxCount = poolSize;
   const sliderValue = useCustomCount
@@ -84,12 +108,15 @@ export function ExamSetupModal({
       filter,
       randomize,
       count: useCustomCount ? (count as number) : "all",
+      isExamMode,
+      examDurationSeconds: 7200,
     });
   };
 
   const available = (v: SessionFilter) => {
     if (v === "mistakes") return mistakesCount > 0;
     if (v === "flagged") return flaggedCount > 0;
+    if (v === "srs_due") return srsDueCount > 0;
     return true;
   };
 
@@ -113,14 +140,14 @@ export function ExamSetupModal({
                 return (
                   <button
                     key={opt.value}
-                    onClick={() => enabled && setFilter(opt.value)}
-                    disabled={!enabled}
+                    onClick={() => enabled && !isExamMode && setFilter(opt.value)}
+                    disabled={!enabled || isExamMode}
                     className={cn(
                       "flex items-center gap-3 rounded-lg border p-3 text-left text-sm transition-colors",
                       filter === opt.value
                         ? "border-primary bg-primary/10 text-foreground"
                         : "border-border hover:border-primary/40",
-                      !enabled && "cursor-not-allowed opacity-40"
+                      (!enabled || isExamMode) && "cursor-not-allowed opacity-40"
                     )}
                   >
                     <span
@@ -139,6 +166,7 @@ export function ExamSetupModal({
                         {opt.description}
                         {opt.value === "mistakes" && ` (${mistakesCount})`}
                         {opt.value === "flagged" && ` (${flaggedCount})`}
+                        {opt.value === "srs_due" && ` (${srsDueCount})`}
                       </div>
                     </div>
                   </button>
@@ -158,6 +186,7 @@ export function ExamSetupModal({
                   if (!v) setCount("all");
                   else setCount(Math.min(20, maxCount));
                 }}
+                disabled={isExamMode}
               />
             </div>
             {useCustomCount && maxCount > 0 && (
@@ -172,6 +201,7 @@ export function ExamSetupModal({
                   step={1}
                   value={[sliderValue]}
                   onValueChange={([v]) => setCount(v)}
+                  disabled={isExamMode}
                 />
               </div>
             )}
@@ -188,7 +218,24 @@ export function ExamSetupModal({
               <Shuffle className="h-4 w-4 text-muted-foreground" />
               <Label>Randomize Order</Label>
             </div>
-            <Switch checked={randomize} onCheckedChange={setRandomize} />
+            <Switch checked={randomize} onCheckedChange={setRandomize} disabled={isExamMode} />
+          </div>
+
+          {/* Exam Mode */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <Label>Exam Mode</Label>
+              </div>
+              <Switch checked={isExamMode} onCheckedChange={setIsExamMode} />
+            </div>
+            {isExamMode && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 space-y-1">
+                <p>120-minute countdown. Answers hidden until submission.</p>
+                <p>100 random questions. 82% to pass.</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -198,7 +245,9 @@ export function ExamSetupModal({
             disabled={poolSize === 0}
             className="w-full"
           >
-            Start Session ({useCustomCount ? sliderValue : poolSize} questions)
+            {isExamMode
+              ? `Start Exam (${useCustomCount ? sliderValue : poolSize} questions, 120 min)`
+              : `Start Session (${useCustomCount ? sliderValue : poolSize} questions)`}
           </Button>
         </DialogFooter>
       </DialogContent>

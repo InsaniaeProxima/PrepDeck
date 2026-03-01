@@ -46,6 +46,16 @@ export type ExamSummary = Omit<Exam, "questions"> & {
   progressPercent: number;
 };
 
+// ─── Search Result (returned by /api/search) ─────────────────────────────────
+export type SearchResult = {
+  examId: string;
+  examName: string;
+  provider: string;
+  questionIndex: number;
+  /** The full question object */
+  question: Question;
+};
+
 // ─── Engine State (persisted to data/engine-state/{id}.json) ──────────────────
 export type EngineState = {
   examId: string;
@@ -56,6 +66,18 @@ export type EngineState = {
   currentLinkIndex: number;
 };
 
+// ─── SRS Card (per-question spaced repetition state) ─────────────────────────
+export type SRSCard = {
+  /** Days until next review (starts at 1) */
+  interval: number;
+  /** SM-2 ease factor (starts at 2.5, minimum 1.3) */
+  easeFactor: number;
+  /** ISO date string YYYY-MM-DD of next scheduled review */
+  dueDate: string;
+  /** How many consecutive successful reviews (reset to 0 on Hard) */
+  repetitions: number;
+};
+
 // ─── Progress (persisted to data/progress/{examId}.json) ──────────────────────
 export type ExamProgress = {
   examId: string;
@@ -64,15 +86,19 @@ export type ExamProgress = {
   /** array of flagged question indices */
   flagged: number[];
   lastSessionIndex: number;
+  /** Spaced repetition data, keyed by question index (same indexing as userAnswers) */
+  srs?: Record<number, SRSCard>;
 };
 
 // ─── Session config (transient, Zustand) ──────────────────────────────────────
-export type SessionFilter = "all" | "mistakes" | "flagged";
+export type SessionFilter = "all" | "mistakes" | "flagged" | "srs_due";
 
 export type SessionConfig = {
   count: number | "all";
   randomize: boolean;
   filter: SessionFilter;
+  isExamMode: boolean;
+  examDurationSeconds: number;
 };
 
 // ─── SSE events emitted by the scraper API ────────────────────────────────────

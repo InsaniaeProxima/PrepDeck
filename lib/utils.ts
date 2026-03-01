@@ -18,7 +18,7 @@ export function shuffle<T>(arr: T[]): T[] {
 
 /** Extract the correct-answer letter(s) from a raw answer string */
 export function parseAnswerLetters(raw: string): string[] {
-  return (raw.match(/[A-E]/g) ?? []);
+  return (raw.match(/[A-H]/g) ?? []);
 }
 
 /** Format ISO date string for display */
@@ -46,4 +46,16 @@ export function isCorrect(question: Question, userAnswer: string): boolean {
 /** Async sleep */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Rewrite all image src attributes in an HTML string so they route through
+ * the /api/examtopics proxy instead of hitting examtopics.com directly.
+ * Prevents hotlink blocking and keeps all traffic through the same origin.
+ */
+export function proxyImageUrls(html: string | undefined | null): string {
+  if (!html) return "";
+  return html
+    .replace(/src="\/(?!api\/)/g, 'src="/api/examtopics/')
+    .replace(/src="https:\/\/www\.examtopics\.com\//g, 'src="/api/examtopics/');
 }

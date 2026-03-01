@@ -18,7 +18,8 @@
  *
  * Modifications from the original:
  *  1. imgEl.remove() before reading innerHTML — prevents double-render in UI.
- *  2. textContent + /[A-E]+/g for the answer — strips hidden styling spans.
+ *  2. textContent (after-colon slice) + /[A-H]+/g for the answer — strips
+ *     label prefix and hidden styling spans.
  *  3. Server-side sanitizeHTML() applied in the /api/exams/[id]/append route.
  *  4. getAttribute("src") instead of imgEl.src — avoids about:blank baseURI.
  *  5. sourceLink param + per-section soft try-catch — verbose failure logging.
@@ -181,7 +182,12 @@ export function parseQuestion(
   try {
     const answerText =
       doc.getElementsByClassName("correct-answer")[0]?.textContent?.trim() ?? "";
-    answer = (answerText.match(/[A-E]+/g) ?? [])[0] ?? "";
+    // Strip the "Correct Answer: " label prefix before matching letters.
+    // Without this, /[A-H]+/g would match "C" from "Correct" as the first result.
+    const afterColon = answerText.includes(":")
+      ? answerText.slice(answerText.lastIndexOf(":") + 1)
+      : answerText;
+    answer = (afterColon.match(/[A-H]+/g) ?? [])[0] ?? "";
   } catch (err) {
     console.warn(`[parser] Answer extraction failed${tag}:`, err);
   }

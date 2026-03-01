@@ -2,25 +2,32 @@
 
 import React from "react";
 import { CheckCircle2, Layers, TrendingUp, XCircle } from "lucide-react";
-import { cn, parseAnswerLetters } from "@/lib/utils";
+import { cn, parseAnswerLetters, proxyImageUrls } from "@/lib/utils";
 import { sanitizeHTML } from "@/lib/security/sanitize-client";
 import { VoteBadges } from "./vote-badges";
-import type { Question } from "@/lib/types";
+import type { Question, SRSCard } from "@/lib/types";
+import type { SRSRating } from "@/lib/srs";
 
 interface AnswerChoicesProps {
   question: Question;
   userAnswer: string | undefined;
   isRevealed: boolean;
   onSelect: (letter: string) => void;
+  srsCard: SRSCard | undefined;
+  srsRated: boolean;
+  onSRSRate: (rating: SRSRating) => void;
 }
 
-const LETTERS = ["A", "B", "C", "D", "E"];
+const LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
 export function AnswerChoices({
   question,
   userAnswer,
   isRevealed,
   onSelect,
+  srsCard,
+  srsRated,
+  onSRSRate,
 }: AnswerChoicesProps) {
   const options = question.options ?? [];
 
@@ -117,7 +124,9 @@ export function AnswerChoices({
                 {/* Option text */}
                 <div
                   className="flex-1 leading-relaxed [&_code]:rounded [&_code]:bg-black/40 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-purple-300 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/40 [&_pre]:p-2"
-                  dangerouslySetInnerHTML={{ __html: sanitizeHTML(option) }}
+                  dangerouslySetInnerHTML={{
+                    __html: sanitizeHTML(proxyImageUrls(option)),
+                  }}
                 />
 
                 {/* Trailing indicators — most-voted pill + correct/incorrect icon */}
@@ -157,9 +166,47 @@ export function AnswerChoices({
           <div
             className="prose prose-sm prose-invert max-w-none text-muted-foreground [&_code]:rounded [&_code]:bg-black/40 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-purple-300"
             dangerouslySetInnerHTML={{
-              __html: sanitizeHTML(question.answerDescription),
+              __html: sanitizeHTML(proxyImageUrls(question.answerDescription)),
             }}
           />
+        </div>
+      )}
+
+      {/* SRS rating buttons -- shown after reveal */}
+      {isRevealed && (
+        <div className="space-y-2">
+          {!srsRated ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground mr-1">
+                How well did you know this?
+              </span>
+              <button
+                onClick={() => onSRSRate(0)}
+                className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/20"
+              >
+                Hard
+              </button>
+              <button
+                onClick={() => onSRSRate(3)}
+                className="rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-400 transition-colors hover:bg-blue-500/20"
+              >
+                Good
+              </button>
+              <button
+                onClick={() => onSRSRate(5)}
+                className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20"
+              >
+                Easy
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Rated.</span>
+              {srsCard?.dueDate && (
+                <span>Next review: {srsCard.dueDate}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

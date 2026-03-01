@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import Image from "next/image";
 import { sanitizeHTML } from "@/lib/security/sanitize-client";
+import { proxyImageUrls } from "@/lib/utils";
 import type { Question } from "@/lib/types";
 
 // Prism.js is loaded lazily to keep SSR clean
@@ -54,13 +54,16 @@ export function QuestionDisplay({
         </span>
       </div>
 
-      {/* Optional image */}
+      {/* Optional image — routed through the proxy to avoid hotlink blocking */}
       {question.imageUrl && (
         <div className="overflow-hidden rounded-lg border border-border/50">
           {/* Use regular img to avoid next.config remote pattern issues */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={question.imageUrl}
+            src={question.imageUrl.replace(
+              "https://www.examtopics.com/",
+              "/api/examtopics/"
+            )}
             alt="Question image"
             className="w-full object-contain"
           />
@@ -74,7 +77,9 @@ export function QuestionDisplay({
           [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/60 [&_pre]:p-4 [&_pre]:text-xs
           [&_code:not(pre_code)]:rounded [&_code:not(pre_code)]:bg-black/40 [&_code:not(pre_code)]:px-1.5 [&_code:not(pre_code)]:py-0.5 [&_code:not(pre_code)]:text-purple-300 [&_code:not(pre_code)]:text-xs
           [&_table]:w-full [&_table]:text-xs [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:font-medium"
-        dangerouslySetInnerHTML={{ __html: sanitizeHTML(question.body) }}
+        dangerouslySetInnerHTML={{
+          __html: sanitizeHTML(proxyImageUrls(question.body)),
+        }}
       />
     </div>
   );
