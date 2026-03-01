@@ -23,6 +23,6 @@ export async function generateMetadata({ params }: QuizPageProps) {
   const { examId } = await params;
   const exam = await loadExam(examId);
   return {
-    title: exam ? `Study ${exam.examCode} — ExamPrep` : "Exam Not Found",
+    title: exam ? `Study ${exam.examCode} — PrepDeck` : "Exam Not Found",
   };
 }

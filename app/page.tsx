@@ -11,7 +11,7 @@ export default function HomePage() {
             <GraduationCap className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold leading-none">ExamPrep</h1>
+            <h1 className="text-sm font-semibold leading-none">PrepDeck</h1>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Certification Study Platform
             </p>

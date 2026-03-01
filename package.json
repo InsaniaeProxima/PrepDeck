@@ -1,7 +1,8 @@
 {
-  "name": "exam-prep-clone",
+  "name": "prepdeck",
   "version": "0.1.0",
   "private": true,
+  "description": "Self-hosted certification exam prep with SRS, Exam Mode, and offline Docker support",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

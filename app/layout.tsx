@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ExamPrep — Cert Study Platform",
-  description: "Self-hosted exam prep with scraped ExamTopics questions",
+  title: "PrepDeck — Cert Study Platform",
+  description: "Self-hosted certification prep with SRS, Exam Mode, and offline Docker support",
 };
 
 export default function RootLayout({
