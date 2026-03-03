@@ -16,6 +16,8 @@ interface QuizState {
   sessionQuestions: Question[];
   // Index within sessionQuestions
   sessionIndex: number;
+  // Last saved session index (from progress), used for "Resume" feature
+  savedSessionIndex: number;
   // Revealed answers (set of sessionIndex values)
   revealed: Set<number>;
   // User-selected answer per question: sessionIndex → letter string (e.g. "A")
@@ -45,9 +47,14 @@ interface QuizState {
   /** Tracks which sessionIndex values have already been SRS-rated in this session */
   srsRatedThisReveal: Set<number>;
 
+  // ── Notes ─────────────────────────────────────────────────────────────────
+  /** User-authored notes keyed by exam question index */
+  notes: Record<number, string>;
+
   // ── Actions ────────────────────────────────────────────────────────────────
   loadExam: (exam: Exam, progress: ExamProgress | null) => void;
   startSession: (config: SessionConfig) => void;
+  resumeSession: () => void;
   selectAnswer: (letter: string) => void;
   revealAnswer: () => void;
   toggleFlag: () => void;
@@ -60,6 +67,7 @@ interface QuizState {
   submitExam: () => void;
   tickExam: () => void;
   rateSRS: (rating: SRSRating) => void;
+  updateNote: (questionIndex: number, text: string) => void;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -121,6 +129,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   exam: null,
   sessionQuestions: [],
   sessionIndex: 0,
+  savedSessionIndex: 0,
   revealed: new Set(),
   userAnswers: new Map(),
   flagged: new Set(),
@@ -138,6 +147,9 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   srsData: {},
   srsRatedThisReveal: new Set(),
 
+  // ── Notes initial state ─────────────────────────────────────────────────────
+  notes: {},
+
   loadExam(exam, progress) {
     const userAnswers = new Map<number, string>(
       Object.entries(progress?.userAnswers ?? {}).map(([k, v]) => [
@@ -147,12 +159,15 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     );
     const flagged = new Set<number>(progress?.flagged ?? []);
     const srsData: Record<number, SRSCard> = progress?.srs ?? {};
+    const notes: Record<number, string> = progress?.notes ?? {};
     set({
       exam,
       userAnswers,
       flagged,
       srsData,
+      notes,
       sessionIndex: 0,
+      savedSessionIndex: progress?.lastSessionIndex ?? 0,
       revealed: new Set(),
       sessionQuestions: [],
       active: false,
@@ -187,6 +202,21 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       examStartedAt: config.isExamMode ? Date.now() : null,
       examScore: null,
     });
+  },
+
+  resumeSession() {
+    // Capture savedSessionIndex BEFORE calling startSession, because
+    // startSession calls set() and a future change could reset
+    // savedSessionIndex, causing the read below to return 0 silently.
+    const { savedSessionIndex } = get();
+    get().startSession({
+      filter: "all",
+      randomize: false,
+      count: "all",
+      isExamMode: false,
+      examDurationSeconds: 0,
+    });
+    set({ sessionIndex: savedSessionIndex });
   },
 
   selectAnswer(letter) {
@@ -275,7 +305,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     // Read all required state in a single get() call so the snapshot is
     // consistent — avoids a second get() that could observe a different
     // sessionIndex if state mutated between calls.
-    const { exam, userAnswers, flagged, sessionIndex } = get();
+    const { exam, userAnswers, flagged, sessionIndex, notes } = get();
     if (!exam) return;
 
     const body = {
@@ -283,6 +313,10 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       userAnswers: Object.fromEntries(userAnswers),
       flagged: [...flagged],
       lastSessionIndex: sessionIndex,
+      // Include notes so a full save (auto-save, manual save, post-exam save)
+      // never races against updateNote's fire-and-forget PUT and silently
+      // drops notes via the server-side fallback to the stale on-disk value.
+      notes,
     };
 
     const res = await fetch(`/api/progress/${exam.id}`, {
@@ -385,6 +419,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       exam: null,
       sessionQuestions: [],
       sessionIndex: 0,
+      savedSessionIndex: 0,
       revealed: new Set(),
       userAnswers: new Map(),
       flagged: new Set(),
@@ -399,7 +434,24 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       // ── SRS reset ──
       srsData: {},
       srsRatedThisReveal: new Set(),
+      // ── Notes reset ──
+      notes: {},
     });
+  },
+
+  updateNote(questionIndex, text) {
+    set((s) => ({ notes: { ...s.notes, [questionIndex]: text } }));
+    const state = get();
+    fetch(`/api/progress/${state.exam?.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userAnswers: Object.fromEntries(state.userAnswers),
+        flagged: [...state.flagged],
+        lastSessionIndex: state.sessionIndex,
+        notes: { ...state.notes, [questionIndex]: text },
+      }),
+    }).catch(console.error);
   },
 }));
 

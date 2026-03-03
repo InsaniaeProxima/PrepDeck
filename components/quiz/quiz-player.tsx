@@ -2,14 +2,13 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
   BarChart3,
-  ChevronDown,
   ChevronLeft,
-  ChevronUp,
   Clock,
   Eye,
   Flag,
@@ -30,9 +29,13 @@ import { ExamSetupModal } from "./exam-setup-modal";
 import { QuestionDisplay } from "./question-display";
 import { AnswerChoices } from "./answer-choices";
 import { DiscussionPanel } from "./discussion-panel";
-import { QuestionMap } from "./question-map";
 import { KeyboardHandler } from "./keyboard-handler";
 import { ExamSummaryOverlay } from "./exam-summary-overlay";
+import { QuestionMapBubble } from "@/components/quiz/question-map-bubble";
+import { QuestionMapSidebar } from "@/components/quiz/question-map-sidebar";
+import { QuestionMapDrawer } from "@/components/quiz/question-map-drawer";
+import { QuestionMapPagination } from "@/components/quiz/question-map-pagination";
+import { useSettingsStore } from "@/lib/store/settings-store";
 import {
   useQuizStore,
   useCurrentQuestion,
@@ -43,7 +46,7 @@ import {
   useSRSCard,
   useSRSRated,
 } from "@/lib/store/quiz-store";
-import { cn, isCorrect, parseAnswerLetters } from "@/lib/utils";
+import { cn, isCorrect } from "@/lib/utils";
 import type { Exam, ExamProgress, SessionConfig } from "@/lib/types";
 
 interface QuizPlayerProps {
@@ -123,6 +126,8 @@ function WeakTopicsPanel({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
+  const router = useRouter();
+
   // ── Scoped Zustand selectors ──────────────────────────────────────────────
   // IMPORTANT: never use bare useQuizStore() here.  During exam mode,
   // tickExam() fires every second and mutates examSecondsRemaining.  A bare
@@ -132,6 +137,8 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
   const loadExam = useQuizStore((s) => s.loadExam);
   const reset = useQuizStore((s) => s.reset);
   const startSession = useQuizStore((s) => s.startSession);
+  const resumeSession = useQuizStore((s) => s.resumeSession);
+  const savedSessionIndex = useQuizStore((s) => s.savedSessionIndex);
   const selectAnswer = useQuizStore((s) => s.selectAnswer);
   const revealAnswer = useQuizStore((s) => s.revealAnswer);
   const toggleFlag = useQuizStore((s) => s.toggleFlag);
@@ -145,6 +152,8 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
   const active = useQuizStore((s) => s.active);
   const setupOpen = useQuizStore((s) => s.setupOpen);
   const userAnswers = useQuizStore((s) => s.userAnswers);
+  const notes = useQuizStore((s) => s.notes);
+  const updateNote = useQuizStore((s) => s.updateNote);
 
   const currentQ = useCurrentQuestion();
   const isRevealed = useIsRevealed();
@@ -155,7 +164,8 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
   const srsCard = useSRSCard();
   const srsRated = useSRSRated();
 
-  const [mapOpen, setMapOpen] = useState(false);
+  const questionMapLayout = useSettingsStore((s) => s.questionMapLayout);
+
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showExamSummary, setShowExamSummary] = useState(false);
@@ -254,13 +264,16 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
         mistakesCount={mistakesCount}
         flaggedCount={flaggedCount}
         srsDueCount={srsDueCount}
+        savedSessionIndex={savedSessionIndex}
         onStart={(config: SessionConfig) => startSession(config)}
+        onCancel={() => router.push("/")}
+        onResumeSession={resumeSession}
       />
 
       {active && currentQ ? (
         /* Full-viewport scroll container — allows long questions and discussions
            to scroll naturally without nested scroll boxes. */
-        <div className="h-screen overflow-y-auto">
+        <div className={cn("h-screen overflow-y-auto", questionMapLayout === "sidebar" && "md:pl-60")}>
 
           {/* ── Exam Mode countdown bar (sticky) ── */}
           {examMode.isExamMode && !examMode.examSubmitted && (
@@ -328,49 +341,8 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
             </Badge>
           </div>
 
-          {/* ── Question map (collapsible) ── */}
-          <div className="rounded-lg border border-border/60 bg-muted/20">
-            <button
-              className="flex w-full items-center justify-between px-4 py-2 text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => setMapOpen((v) => !v)}
-            >
-              <span className="font-medium">
-                Question Map ({totalInSession} questions)
-              </span>
-              {mapOpen ? (
-                <ChevronUp className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronDown className="h-3.5 w-3.5" />
-              )}
-            </button>
-            {mapOpen && (
-              <div className="border-t border-border/60 px-4 py-3">
-                <QuestionMap />
-                <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block h-3 w-3 rounded bg-primary" />
-                    Current
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block h-3 w-3 rounded bg-emerald-500" />
-                    Correct
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block h-3 w-3 rounded bg-red-500" />
-                    Incorrect
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block h-3 w-3 rounded bg-amber-400" />
-                    Flagged
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block h-3 w-3 rounded bg-primary/40" />
-                    Answered
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
+          {/* ── Pagination map sits inline between progress bar and question ── */}
+          {questionMapLayout === "pagination" && <QuestionMapPagination />}
 
           {/* ── Question ── */}
           <QuestionDisplay
@@ -384,7 +356,27 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
             question={currentQ}
             userAnswer={userAnswer}
             isRevealed={isRevealed}
-            onSelect={selectAnswer}
+            onSelect={(letter) => {
+              // Guard: do not ping if the answer is already revealed (selectAnswer
+              // would be a no-op, but the fetch is outside selectAnswer and would
+              // still fire, inflating the activity counter on every click).
+              // Also skip for multi-select re-clicks (changing a selection after the
+              // first pick would otherwise fire a second ping for the same question).
+              const alreadyAnswered =
+                (() => {
+                  const q = sessionQuestions[sessionIndex];
+                  if (!q || !exam) return false;
+                  const examIdx = exam.questions.indexOf(q);
+                  return userAnswers.has(examIdx);
+                })();
+              selectAnswer(letter);
+              // Fire activity ping only on the very first answer selection for this
+              // question (before reveal, and only when transitioning from no-answer
+              // to first-answer).
+              if (!isRevealed && !alreadyAnswered) {
+                fetch("/api/activity", { method: "POST" }).catch(() => {});
+              }
+            }}
             srsCard={srsCard}
             srsRated={srsRated}
             onSRSRate={rateSRS}
@@ -482,6 +474,22 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
             </>
           )}
 
+          {/* ── My Notes — hidden during active exam ── */}
+          {!(examMode.isExamMode && !examMode.examSubmitted) && (() => {
+            const currentExamIdx = exam.questions.indexOf(currentQ);
+            return (
+              <div className="mt-4 space-y-2">
+                <label className="text-sm font-medium text-muted-foreground">My Notes</label>
+                <textarea
+                  placeholder="Add your notes for this question…"
+                  value={notes[currentExamIdx] ?? ""}
+                  onChange={(e) => updateNote(currentExamIdx, e.target.value)}
+                  className="min-h-[80px] w-full resize-y rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                />
+              </div>
+            );
+          })()}
+
           {/* ── Analytics (weak topics) — hidden during active exam ── */}
           {!(examMode.isExamMode && !examMode.examSubmitted) && (
             <div>
@@ -512,6 +520,11 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
             </a>
           )}
         </div>
+
+        {/* ── Overlay/fixed maps ── */}
+        {questionMapLayout === "bubble"  && <QuestionMapBubble />}
+        {questionMapLayout === "sidebar" && <QuestionMapSidebar />}
+        {questionMapLayout === "drawer"  && <QuestionMapDrawer />}
         </div>
       ) : !setupOpen ? (
         <div className="flex h-64 items-center justify-center text-muted-foreground">

@@ -21,7 +21,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { loadExam, saveExam } from "@/lib/storage/json-storage";
+import { loadExam, saveExam, upsertExamMeta } from "@/lib/storage/json-storage";
 import { sanitizeHTML } from "@/lib/security/sanitize";
 import type { Exam, Question } from "@/lib/types";
 
@@ -118,6 +118,7 @@ export async function POST(
   exam.updatedAt = new Date().toISOString();
 
   await saveExam(exam);
+  await upsertExamMeta(exam);
 
   return NextResponse.json({
     ok: true,

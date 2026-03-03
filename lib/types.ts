@@ -46,6 +46,18 @@ export type ExamSummary = Omit<Exam, "questions"> & {
   progressPercent: number;
 };
 
+// ─── Exam Metadata Index (persisted to data/exams/_index.json) ────────────────
+export type ExamMeta = {
+  id: string;
+  provider: string;
+  examCode: string;
+  totalLinks: number;
+  fetchedCount: number;
+  questionCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 // ─── Search Result (returned by /api/search) ─────────────────────────────────
 export type SearchResult = {
   examId: string;
@@ -88,6 +100,8 @@ export type ExamProgress = {
   lastSessionIndex: number;
   /** Spaced repetition data, keyed by question index (same indexing as userAnswers) */
   srs?: Record<number, SRSCard>;
+  /** User-authored notes, keyed by question index */
+  notes?: Record<number, string>;
 };
 
 // ─── Session config (transient, Zustand) ──────────────────────────────────────
@@ -109,3 +123,31 @@ export type ScrapeEvent =
   | { type: "done"; examId: string; total: number; skipped: number }
   | { type: "error"; message: string }
   | { type: "resumed"; fromIndex: number };
+
+// ---- Multi-scrape job types ------------------------------------------------
+
+export type LogEntry = {
+  id: number;
+  type: "info" | "success" | "error" | "warn";
+  message: string;
+  ts: string;
+};
+
+export type ScrapeJobStatus = "running" | "done" | "error" | "stopped";
+
+export type ScrapeJobState = {
+  jobId: string;
+  examId: string;
+  examCode: string;
+  provider: string;
+  status: ScrapeJobStatus;
+  linksFound: number;
+  linksTotalPages: number;
+  totalLinks: number;
+  questionsScraped: number;
+  questionsFailed: number;
+  logs: LogEntry[];
+  stopFn: (() => void) | null;
+  startedAt: number;
+  finishedAt: number | null;
+};

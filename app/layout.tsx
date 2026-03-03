@@ -1,6 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { ScrapeTaskManager } from "@/components/scraper/scrape-task-manager";
+import { ThemeProvider } from "@/components/theme-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +15,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PrepDeck — Cert Study Platform",
-  description: "Self-hosted certification prep with SRS, Exam Mode, and offline Docker support",
+  title: "PrepDeck — Advanced Certification Exam Prep",
+  description: "Self-hosted certification exam prep with multi-scraping, 4 question map layouts, custom themes, and local JSON storage.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#7c3aed",
 };
 
 export default function RootLayout({
@@ -27,7 +38,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-screen antialiased`}
       >
+        <ThemeProvider />
         {children}
+        <ScrapeTaskManager />
       </body>
     </html>
   );

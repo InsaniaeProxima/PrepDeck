@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   BarChart3,
@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PROVIDER_OPTIONS } from "@/lib/providers";
+import { findVendorTopic, getExamConcepts, getVendorConcepts } from "@/lib/vendor-topics";
 import type { ExamSummary, SearchResult } from "@/lib/types";
 
 // ── Search result card ───────────────────────────────────────────────────────
@@ -71,15 +71,18 @@ export function ExamLibrary() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [providerFilter, setProviderFilter] = useState("all");
+  const [vendorFilter, setVendorFilter] = useState<string>("all");
   const [scrapeOpen, setScrapeOpen] = useState(false);
   const [resumeTarget, setResumeTarget] = useState<ExamSummary | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
   // ── Global question search state ─────────────────────────────────────────
   const [globalSearch, setGlobalSearch] = useState("");
+  const [searchScope, setSearchScope] = useState<string>("all");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchPerformed, setSearchPerformed] = useState(false);
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchExams = useCallback(async () => {
@@ -95,6 +98,22 @@ export function ExamLibrary() {
   useEffect(() => {
     fetchExams();
   }, [fetchExams]);
+
+  // ── Tag suggestions (concept tags for current scope/vendor) ──────────────
+  useEffect(() => {
+    if (searchScope !== "all") {
+      const scopedExam = exams.find((e) => e.id === searchScope);
+      if (scopedExam) {
+        setTagSuggestions(getExamConcepts(scopedExam.examCode).slice(0, 12));
+        return;
+      }
+    }
+    if (vendorFilter !== "all") {
+      setTagSuggestions(getVendorConcepts(vendorFilter).slice(0, 12));
+      return;
+    }
+    setTagSuggestions([]);
+  }, [searchScope, vendorFilter, exams]);
 
   // ── Debounced global search ──────────────────────────────────────────────
   useEffect(() => {
@@ -122,8 +141,11 @@ export function ExamLibrary() {
 
     debounceRef.current = setTimeout(async () => {
       try {
+        const scopeParam = searchScope !== "all" ? `&examId=${encodeURIComponent(searchScope)}` : "";
+        const limitParam = searchScope !== "all" ? "&limit=50" : "&limit=20";
+        const vendorParam = vendorFilter !== "all" ? `&vendorId=${encodeURIComponent(vendorFilter)}` : "";
         const res = await fetch(
-          `/api/search?q=${encodeURIComponent(trimmed)}&limit=20`
+          `/api/search?q=${encodeURIComponent(trimmed)}${limitParam}${scopeParam}${vendorParam}`
         );
         const data = await res.json();
         setSearchResults(data.results ?? []);
@@ -139,7 +161,7 @@ export function ExamLibrary() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [globalSearch]);
+  }, [globalSearch, searchScope, vendorFilter]);
 
   const handleDelete = (id: string) => {
     setExams((prev) => prev.filter((e) => e.id !== id));
@@ -175,7 +197,7 @@ export function ExamLibrary() {
   };
 
   // ── Filtering ───────────────────────────────────────────────────────────────
-  const filtered = exams.filter((e) => {
+  const displayExams = exams.filter((e) => {
     const matchSearch =
       !search ||
       e.examCode.toLowerCase().includes(search.toLowerCase()) ||
@@ -184,6 +206,24 @@ export function ExamLibrary() {
       providerFilter === "all" || e.provider === providerFilter;
     return matchSearch && matchProvider;
   });
+
+  // ── Vendor filter ────────────────────────────────────────────────────────────
+  const availableVendors = useMemo(() => {
+    const vendors = new Map<string, string>(); // vendorId -> vendorName
+    for (const exam of exams) {
+      const v = findVendorTopic(exam.examCode);
+      if (v) vendors.set(v.vendorId, v.vendorName);
+    }
+    return Array.from(vendors.entries());
+  }, [exams]);
+
+  const filteredExams = useMemo(() => {
+    return displayExams.filter((exam) => {
+      if (vendorFilter === "all") return true;
+      const v = findVendorTopic(exam.examCode);
+      return v?.vendorId === vendorFilter;
+    });
+  }, [displayExams, vendorFilter]);
 
   const usedProviders = [...new Set(exams.map((e) => e.provider))];
 
@@ -263,18 +303,51 @@ export function ExamLibrary() {
 
       {/* ── Global Question Search ── */}
       <div className="space-y-3">
-        <div className="relative">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-          <Input
-            className="pl-9 text-sm"
-            placeholder="Search all questions across exams..."
-            value={globalSearch}
-            onChange={(e) => setGlobalSearch(e.target.value)}
-          />
-          {searchLoading && (
-            <Loader2 className="absolute right-3 top-3 h-4 w-4 animate-spin text-muted-foreground" />
-          )}
+        <div className="flex gap-2 items-center">
+          {/* Scope selector */}
+          <Select value={searchScope} onValueChange={setSearchScope}>
+            <SelectTrigger className="w-[160px] shrink-0">
+              <SelectValue placeholder="All Exams" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Exams</SelectItem>
+              {exams.map((exam) => (
+                <SelectItem key={exam.id} value={exam.id}>
+                  {exam.examCode}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Search input */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              className="pl-9 text-sm"
+              placeholder="Search all questions across exams..."
+              value={globalSearch}
+              onChange={(e) => setGlobalSearch(e.target.value)}
+            />
+            {searchLoading && (
+              <Loader2 className="absolute right-3 top-3 h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+          </div>
         </div>
+
+        {/* Concept tag suggestions */}
+        {tagSuggestions.length > 0 && !globalSearch && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {tagSuggestions.map((tag) => (
+              <button
+                key={tag}
+                onClick={() => setGlobalSearch(tag)}
+                className="inline-flex items-center rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary hover:bg-primary/5 transition-colors"
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Search results */}
         {searchPerformed && globalSearch.trim().length >= 2 && (
@@ -328,6 +401,23 @@ export function ExamLibrary() {
           </SelectContent>
         </Select>
 
+        {/* Vendor filter */}
+        {availableVendors.length > 0 && (
+          <Select value={vendorFilter} onValueChange={setVendorFilter}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="All Vendors" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Vendors</SelectItem>
+              {availableVendors.map(([vendorId, vendorName]) => (
+                <SelectItem key={vendorId} value={vendorId}>
+                  {vendorName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
         <Button variant="outline" size="sm" onClick={() => importRef.current?.click()}>
           <Upload className="mr-1 h-4 w-4" />
           Import
@@ -347,7 +437,7 @@ export function ExamLibrary() {
       </div>
 
       {/* ── Grid ── */}
-      {filtered.length === 0 ? (
+      {filteredExams.length === 0 ? (
         <div className="flex h-64 flex-col items-center justify-center gap-4 rounded-xl border border-dashed text-muted-foreground">
           <p className="text-sm">
             {exams.length === 0
@@ -363,7 +453,7 @@ export function ExamLibrary() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filtered.map((exam) => (
+          {filteredExams.map((exam) => (
             <ExamCard
               key={exam.id}
               exam={exam}

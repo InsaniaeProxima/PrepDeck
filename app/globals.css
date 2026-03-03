@@ -45,16 +45,41 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 
-  /* Purple viewport frame */
+  /* Viewport frame — color follows active theme */
   body::before {
     content: "";
     position: fixed;
     inset: 0;
-    border: 3px solid hsl(264 75% 65% / 0.25);
+    border: 3px solid hsl(var(--primary) / 0.25);
     pointer-events: none;
     z-index: 9999;
     border-radius: 4px;
   }
+}
+
+/* ─── Color themes ───────────────────────────────────────────────────────── */
+/* Each class overrides --primary and --ring; everything that uses these      */
+/* CSS variables (buttons, rings, progress bars, SVG strokes) updates live.   */
+
+.theme-blue {
+  --primary: 217 91% 60%;
+  --ring: 217 91% 60%;
+}
+
+.theme-green {
+  --primary: 142 71% 45%;
+  --ring: 142 71% 45%;
+}
+
+.theme-yellow {
+  --primary: 38 95% 55%;
+  --ring: 38 95% 55%;
+  --primary-foreground: 0 0% 5%;
+}
+
+.theme-red {
+  --primary: 0 72% 58%;
+  --ring: 0 72% 58%;
 }
 
 /* ─── Prism theme override (dark purple) ─────────────────────────────────── */

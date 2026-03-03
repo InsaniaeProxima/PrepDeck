@@ -10,8 +10,10 @@
 
 # User data — keep folder structure but never commit JSON data files
 data/exams/*.json
+data/exams/_index.json
 data/progress/*.json
 data/engine-state/*.json
+data/activity.json
 
 # Next.js
 .next/
@@ -30,3 +32,6 @@ npm-debug.log*
 
 # Build artifacts
 coverage/
+
+# Internal planning docs
+*_blueprint.md

@@ -28,6 +28,7 @@ export async function PUT(
     flagged: body.flagged ?? [],
     lastSessionIndex: body.lastSessionIndex ?? 0,
     srs: existing?.srs, // Preserve SRS data from disk so auto-save doesn't wipe it
+    notes: body.notes ?? existing?.notes, // Persist notes; fall back to existing on disk
   };
 
   await saveProgress(progress);

@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState, useRef, useCallback, useLayoutEffect } from "react";
+import React, { useState, useRef, useCallback, useLayoutEffect, useEffect } from "react";
 import { Loader2, Play, RefreshCw, Settings2, Wifi } from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -26,7 +27,8 @@ import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { PROVIDER_OPTIONS } from "@/lib/providers";
 import { useScraper } from "@/lib/scraper/use-scraper";
-import type { ScrapeEvent } from "@/lib/types";
+import { useScraperStore } from "@/lib/store/scraper-store";
+import type { ScrapeEvent, LogEntry } from "@/lib/types";
 
 interface ScrapeModalProps {
   open: boolean;
@@ -36,13 +38,8 @@ interface ScrapeModalProps {
   resumeExamId?: string;
   resumeProvider?: string;
   resumeExamCode?: string;
-}
-
-interface LogEntry {
-  id: number;
-  type: "info" | "success" | "error" | "warn";
-  message: string;
-  ts: string;
+  // If provided, opens in view-only mode for an existing job
+  activeJobId?: string;
 }
 
 export function ScrapeModal({
@@ -52,12 +49,18 @@ export function ScrapeModal({
   resumeExamId,
   resumeProvider,
   resumeExamCode,
+  activeJobId,
 }: ScrapeModalProps) {
+  const isViewMode = !!activeJobId;
+  const viewedJob = useScraperStore((s) =>
+    activeJobId ? (s.jobs[activeJobId] ?? null) : null
+  );
+
   const [provider, setProvider] = useState(resumeProvider ?? "");
   const [examCode, setExamCode] = useState(resumeExamCode ?? "");
   const [manualProvider, setManualProvider] = useState("");
-  const [batchSize, setBatchSize] = useState(10);
-  const [sleepDuration, setSleepDuration] = useState(100);
+  const [batchSize, setBatchSize] = useState(5);
+  const [sleepDuration, setSleepDuration] = useState(500);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -65,9 +68,15 @@ export function ScrapeModal({
   const [qProgress, setQProgress] = useState({ fetched: 0, total: 0 });
   const logId = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Ref for the view-mode log panel — allows auto-scroll on every new log entry
+  // appended to the Zustand store without relying on an inline ref callback
+  // (which only fires once on mount and never again when new entries arrive).
+  const viewLogScrollRef = useRef<HTMLDivElement>(null);
   // Tracks the previous value of `open` so the reset effect only fires on the
   // false → true transition, not on every dep change while the modal is open.
   const prevOpenRef = useRef(false);
+
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
   const effectiveProvider =
     provider === "__other__" ? manualProvider.trim() : provider;
@@ -92,6 +101,15 @@ export function ScrapeModal({
   // already open (e.g. Zustand store updates). Without the guard those
   // re-renders would clobber any text the user has already typed into the
   // provider/examCode inputs.
+  // Auto-scroll the view-mode log panel whenever a new log entry is appended.
+  // A plain `useEffect` (not useLayoutEffect) is correct here — we want the
+  // scroll to happen after the DOM has been updated with the new entry.
+  useEffect(() => {
+    if (viewLogScrollRef.current) {
+      viewLogScrollRef.current.scrollTop = viewLogScrollRef.current.scrollHeight;
+    }
+  }, [viewedJob?.logs.length]);
+
   useLayoutEffect(() => {
     if (open && !prevOpenRef.current) {
       setDone(false);
@@ -108,10 +126,15 @@ export function ScrapeModal({
 
   const addLog = useCallback(
     (message: string, type: LogEntry["type"] = "info") => {
+      // Capture and increment OUTSIDE the setState updater so that React 18
+      // Strict Mode's double-invocation of updaters does not mutate the ref
+      // twice per call (which would cause IDs to skip every other integer in
+      // development mode and make log entries harder to debug).
+      const id = logId.current++;
       setLog((prev) => [
         ...prev,
         {
-          id: logId.current++,
+          id,
           type,
           message,
           ts: new Date().toLocaleTimeString(),
@@ -198,7 +221,7 @@ export function ScrapeModal({
   // a flush is still writing to disk, allowing a second scrape to launch on the
   // same examId and causing concurrent JSON writes.
   const handleStop = () => {
-    scraper.stop();
+    scraper.stop(scraper.activeJobId.current ?? "");
     addLog("Stopped by user.", "warn");
   };
 
@@ -210,6 +233,103 @@ export function ScrapeModal({
     qProgress.total > 0
       ? Math.round((qProgress.fetched / qProgress.total) * 100)
       : 0;
+
+  if (isViewMode) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {viewedJob
+                ? `${viewedJob.provider} / ${viewedJob.examCode}`
+                : "Scrape Job"}
+            </DialogTitle>
+            <DialogDescription>
+              {viewedJob ? (
+                <span className={cn(
+                  "text-xs font-medium",
+                  viewedJob.status === "running" && "text-purple-400",
+                  viewedJob.status === "done" && "text-green-400",
+                  viewedJob.status === "error" && "text-red-400",
+                  viewedJob.status === "stopped" && "text-amber-400",
+                )}>
+                  {viewedJob.status.toUpperCase()}
+                </span>
+              ) : "Job not found"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {viewedJob && (
+            <div className="space-y-4">
+              {/* Progress bars */}
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Links</span>
+                  <span>{viewedJob.linksFound} / {viewedJob.linksTotalPages} pages</span>
+                </div>
+                <Progress
+                  value={viewedJob.linksTotalPages > 0
+                    ? (viewedJob.linksFound / viewedJob.linksTotalPages) * 100
+                    : 0}
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Questions</span>
+                  <span>{viewedJob.questionsScraped} / {viewedJob.totalLinks}</span>
+                </div>
+                <Progress
+                  value={viewedJob.totalLinks > 0
+                    ? (viewedJob.questionsScraped / viewedJob.totalLinks) * 100
+                    : 0}
+                />
+              </div>
+
+              {/* Log panel — plain scrollable div, NOT ScrollArea */}
+              <div
+                className="h-64 overflow-y-auto rounded-md border border-border bg-black/40 p-3 font-mono text-xs space-y-1"
+                ref={viewLogScrollRef}
+              >
+                {viewedJob.logs.length === 0 && (
+                  <p className="text-muted-foreground">No logs yet…</p>
+                )}
+                {viewedJob.logs.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className={cn(
+                      entry.type === "error" && "text-red-400",
+                      entry.type === "success" && "text-green-400",
+                      entry.type === "warn" && "text-amber-400",
+                      entry.type === "info" && "text-muted-foreground",
+                    )}
+                  >
+                    <span className="opacity-50">{entry.ts} </span>
+                    {entry.message}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
+            {viewedJob?.status === "running" ? (
+              <Button
+                variant="destructive"
+                className="w-full"
+                onClick={() => {
+                  useScraperStore.getState().stopJob(activeJobId!);
+                }}
+              >
+                Stop This Scrape
+              </Button>
+            ) : (
+              <Button variant="outline" className="w-full" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -284,9 +404,24 @@ export function ScrapeModal({
             <div className="grid grid-cols-2 gap-4">
               {/* Batch size */}
               <div className="space-y-2">
-                <div className="flex justify-between text-xs">
+                <div className="flex justify-between items-center text-xs">
                   <Label className="text-muted-foreground">Parallel batch size</Label>
-                  <span className="font-medium text-primary">{batchSize}</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={20}
+                    step={1}
+                    value={batchSize}
+                    className="h-6 w-16 text-right text-xs px-1"
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      if (!isNaN(v)) setBatchSize(clamp(v, 1, 20));
+                    }}
+                    onBlur={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      if (isNaN(v)) setBatchSize(batchSize);
+                    }}
+                  />
                 </div>
                 <Slider
                   min={1}
@@ -302,9 +437,24 @@ export function ScrapeModal({
 
               {/* Sleep duration */}
               <div className="space-y-2">
-                <div className="flex justify-between text-xs">
+                <div className="flex justify-between items-center text-xs">
                   <Label className="text-muted-foreground">Sleep between batches</Label>
-                  <span className="font-medium text-primary">{(sleepDuration / 1000).toFixed(1)}s</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10000}
+                    step={250}
+                    value={sleepDuration}
+                    className="h-6 w-16 text-right text-xs px-1"
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      if (!isNaN(v)) setSleepDuration(clamp(v, 0, 10000));
+                    }}
+                    onBlur={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      if (isNaN(v)) setSleepDuration(sleepDuration);
+                    }}
+                  />
                 </div>
                 <Slider
                   min={0}
@@ -314,7 +464,7 @@ export function ScrapeModal({
                   onValueChange={([v]) => setSleepDuration(v)}
                 />
                 <p className="text-[10px] text-muted-foreground/60">
-                  Pause between batches to avoid rate limits
+                  Pause between batches (0 = no pause)
                 </p>
               </div>
             </div>

@@ -70,6 +70,74 @@ export async function GET(
     return new Response("Upstream unreachable", { status: 502 });
   }
 
+  // ── Cloudflare challenge detection ─────────────────────────────────────────
+  // CF JS-challenge pages return HTTP 200 but with a tiny body (<30KB) and
+  // distinctive headers. Detect them and return 429 so the scraper's existing
+  // rate-limit backoff path activates instead of trying to parse garbage HTML.
+  if (upstream.status === 200) {
+    const serverHeader = (upstream.headers.get("server") ?? "").toLowerCase();
+    const cfMitigated = upstream.headers.get("cf-mitigated");
+    const isCfServer = serverHeader.includes("cloudflare");
+
+    if (isCfServer) {
+      // Definitive challenge signal — no body inspection needed.
+      if (cfMitigated) {
+        console.warn(`[proxy] Cloudflare challenge detected for /${path} — returning 429`);
+        return new Response(
+          JSON.stringify({ error: "cloudflare_challenge", message: "Upstream returned a Cloudflare JS-challenge page" }),
+          {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": "10",
+            },
+          }
+        );
+      }
+
+      const contentLength = parseInt(upstream.headers.get("content-length") ?? "", 10);
+      if (!isNaN(contentLength) && contentLength < 30000) {
+        console.warn(`[proxy] Cloudflare challenge detected for /${path} — returning 429`);
+        return new Response(
+          JSON.stringify({ error: "cloudflare_challenge", message: "Upstream returned a Cloudflare JS-challenge page" }),
+          {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": "10",
+            },
+          }
+        );
+      }
+
+      if (isNaN(contentLength)) {
+        // No content-length — must buffer to measure size.
+        const bodyBuffer = await upstream.arrayBuffer();
+        if (bodyBuffer.byteLength < 30000) {
+          console.warn(`[proxy] Cloudflare challenge detected for /${path} — returning 429`);
+          return new Response(
+            JSON.stringify({ error: "cloudflare_challenge", message: "Upstream returned a Cloudflare JS-challenge page" }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "10",
+              },
+            }
+          );
+        }
+        // Large body with CF server header — legitimate response, return buffered.
+        return new Response(bodyBuffer, {
+          status: 200,
+          headers: {
+            "Content-Type":
+              upstream.headers.get("Content-Type") ?? "text/html; charset=utf-8",
+          },
+        });
+      }
+    }
+  }
+
   // CRITICAL: do NOT forward Content-Encoding to the browser.
   // Node.js fetch auto-decompresses gzip/brotli bodies before exposing
   // upstream.body — so by the time we stream it, the bytes are plain text.

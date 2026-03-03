@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { saveExam } from "@/lib/storage/json-storage";
+import { saveExam, upsertExamMeta } from "@/lib/storage/json-storage";
 import { sanitizeHTML } from "@/lib/security/sanitize";
 import type { Exam, Question } from "@/lib/types";
 
@@ -43,5 +43,6 @@ export async function POST(req: NextRequest) {
   };
 
   await saveExam(exam);
+  await upsertExamMeta(exam);
   return NextResponse.json({ id: exam.id });
 }

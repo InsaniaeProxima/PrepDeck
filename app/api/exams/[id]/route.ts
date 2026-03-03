@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { loadExam, deleteExam } from "@/lib/storage/json-storage";
+import { loadExam, deleteExam, removeExamMeta } from "@/lib/storage/json-storage";
 
 export async function GET(
   _req: NextRequest,
@@ -17,5 +17,6 @@ export async function DELETE(
 ) {
   const { id } = await params;
   await deleteExam(id);
+  await removeExamMeta(id);
   return NextResponse.json({ ok: true });
 }

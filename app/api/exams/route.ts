@@ -1,30 +1,23 @@
 import { NextResponse } from "next/server";
-import { listExams, loadProgress } from "@/lib/storage/json-storage";
-import { isCorrect } from "@/lib/utils";
+import { loadExamIndex, loadProgress } from "@/lib/storage/json-storage";
 
 export async function GET() {
-  const exams = await listExams();
+  const index = await loadExamIndex();
 
   const summaries = await Promise.all(
-    exams.map(async (exam) => {
-      const progress = await loadProgress(exam.id);
+    Object.values(index).map(async (meta) => {
+      const progress = await loadProgress(meta.id);
       const userAnswers = progress?.userAnswers ?? {};
 
-      let answeredCount = 0;
-      let correctCount = 0;
-      exam.questions.forEach((q, i) => {
-        const chosen = userAnswers[i];
-        if (chosen !== undefined) {
-          answeredCount++;
-          if (isCorrect(q, chosen)) correctCount++;
-        }
-      });
+      const answeredCount = Object.keys(userAnswers).length;
+      // correctCount is not computable without loading the full exam — use
+      // the stored value from the progress file if available, otherwise 0.
+      const correctCount = (progress as { correctCount?: number } | null)?.correctCount ?? 0;
 
-      const totalQ = exam.questions.length;
+      const totalQ = meta.questionCount;
       const progressPercent =
         totalQ > 0 ? Math.round((answeredCount / totalQ) * 100) : 0;
 
-      const { questions: _, ...meta } = exam;
       return { ...meta, answeredCount, correctCount, progressPercent };
     })
   );

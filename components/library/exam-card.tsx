@@ -19,6 +19,7 @@ import {
   PROVIDER_GRADIENT,
   DEFAULT_PROVIDER_GRADIENT,
 } from "@/lib/providers";
+import { findVendorTopic } from "@/lib/vendor-topics";
 import type { ExamSummary } from "@/lib/types";
 
 interface ExamCardProps {
@@ -32,6 +33,7 @@ export function ExamCard({ exam, onDelete, onResume }: ExamCardProps) {
 
   const gradient = PROVIDER_GRADIENT[exam.provider] ?? DEFAULT_PROVIDER_GRADIENT;
   const emoji = PROVIDER_EMOJI[exam.provider] ?? "📚";
+  const vendorInfo = findVendorTopic(exam.examCode);
   const isScrapingComplete =
     exam.fetchedCount >= exam.totalLinks && exam.totalLinks > 0;
   const accuracy =
@@ -79,6 +81,11 @@ export function ExamCard({ exam, onDelete, onResume }: ExamCardProps) {
                 <Badge variant="warning" className="mt-0.5 text-[10px]">
                   Partial
                 </Badge>
+              )}
+              {vendorInfo && vendorInfo.certFamily && (
+                <p className="mt-0.5 text-[10px] text-muted-foreground truncate">
+                  {vendorInfo.certFamily}
+                </p>
               )}
             </div>
           </div>
