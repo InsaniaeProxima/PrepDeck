@@ -1,0 +1,10 @@
+services:
+  prepdeck:
+    build: .
+    container_name: prepdeck
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist all user data (exams, progress, activity) outside the container
+      - ./data:/app/data
+    restart: unless-stopped

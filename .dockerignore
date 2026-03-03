@@ -1,0 +1,11 @@
+.git
+.next
+node_modules
+data/exams/*.json
+data/progress/*.json
+data/engine-state/*.json
+data/activity.json
+.env*
+*.log
+.DS_Store
+Thumbs.db
