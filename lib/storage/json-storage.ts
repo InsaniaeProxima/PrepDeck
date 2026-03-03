@@ -98,6 +98,19 @@ export async function upsertExamMeta(exam: Exam): Promise<void> {
   await saveExamIndex(index);
 }
 
+/** Update the customName on both the exam file and the index entry. */
+export async function updateExamCustomName(id: string, customName: string): Promise<void> {
+  const exam = await loadExam(id);
+  if (!exam) return;
+  exam.customName = customName || undefined;
+  await saveExam(exam);
+  const index = await loadExamIndex();
+  if (index[id]) {
+    index[id].customName = customName || undefined;
+    await saveExamIndex(index);
+  }
+}
+
 /** Remove a single entry from the index (called on DELETE). */
 export async function removeExamMeta(examId: string): Promise<void> {
   const index = await loadExamIndex();

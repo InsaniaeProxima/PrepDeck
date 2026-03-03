@@ -32,6 +32,7 @@ export type Exam = {
   id: string;
   provider: string;
   examCode: string;
+  customName?: string;
   totalLinks: number;
   fetchedCount: number;
   createdAt: string;
@@ -51,6 +52,7 @@ export type ExamMeta = {
   id: string;
   provider: string;
   examCode: string;
+  customName?: string;
   totalLinks: number;
   fetchedCount: number;
   questionCount: number;

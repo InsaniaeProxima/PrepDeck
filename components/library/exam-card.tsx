@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   CheckCircle,
   Download,
+  Pencil,
   Play,
   RefreshCw,
   Trash2,
@@ -13,6 +14,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   PROVIDER_EMOJI,
@@ -26,10 +35,14 @@ interface ExamCardProps {
   exam: ExamSummary;
   onDelete: (id: string) => void;
   onResume: (exam: ExamSummary) => void;
+  onRename: (id: string, customName: string) => void;
 }
 
-export function ExamCard({ exam, onDelete, onResume }: ExamCardProps) {
+export function ExamCard({ exam, onDelete, onResume, onRename }: ExamCardProps) {
   const [deleting, setDeleting] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const gradient = PROVIDER_GRADIENT[exam.provider] ?? DEFAULT_PROVIDER_GRADIENT;
   const emoji = PROVIDER_EMOJI[exam.provider] ?? "📚";
@@ -40,6 +53,24 @@ export function ExamCard({ exam, onDelete, onResume }: ExamCardProps) {
     exam.answeredCount > 0
       ? Math.round((exam.correctCount / exam.answeredCount) * 100)
       : null;
+
+  const openRename = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setNameInput(exam.customName ?? exam.examCode);
+    setRenameOpen(true);
+  };
+
+  const handleSaveRename = async () => {
+    setSaving(true);
+    await fetch(`/api/exams/${exam.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customName: nameInput.trim() }),
+    });
+    onRename(exam.id, nameInput.trim());
+    setSaving(false);
+    setRenameOpen(false);
+  };
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -76,7 +107,14 @@ export function ExamCard({ exam, onDelete, onResume }: ExamCardProps) {
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground capitalize">
                 {exam.provider}
               </p>
-              <h3 className="font-bold text-base leading-tight">{exam.examCode}</h3>
+              <h3 className="font-bold text-base leading-tight">
+                {exam.customName ?? exam.examCode}
+              </h3>
+              {exam.customName && (
+                <p className="text-[10px] text-muted-foreground/60 leading-tight">
+                  {exam.examCode}
+                </p>
+              )}
               {!isScrapingComplete && (
                 <Badge variant="warning" className="mt-0.5 text-[10px]">
                   Partial
@@ -90,8 +128,17 @@ export function ExamCard({ exam, onDelete, onResume }: ExamCardProps) {
             </div>
           </div>
 
-          {/* Hover-reveal action buttons (export + delete) */}
+          {/* Hover-reveal action buttons */}
           <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={openRename}
+              title="Rename exam"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -196,6 +243,35 @@ export function ExamCard({ exam, onDelete, onResume }: ExamCardProps) {
           Updated {new Date(exam.updatedAt).toLocaleDateString()}
         </p>
       </CardContent>
+
+      {/* Rename dialog */}
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="max-w-sm" onClick={(e) => e.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle>Rename Exam</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">
+              Custom name <span className="opacity-60">(leave blank to reset to exam code)</span>
+            </label>
+            <Input
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !saving && handleSaveRename()}
+              placeholder={exam.examCode}
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" size="sm" onClick={() => setRenameOpen(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleSaveRename} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

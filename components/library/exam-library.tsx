@@ -167,6 +167,12 @@ export function ExamLibrary() {
     setExams((prev) => prev.filter((e) => e.id !== id));
   };
 
+  const handleRename = (id: string, customName: string) => {
+    setExams((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, customName: customName || undefined } : e))
+    );
+  };
+
   const handleResume = (exam: ExamSummary) => {
     setResumeTarget(exam);
     setScrapeOpen(true);
@@ -459,6 +465,7 @@ export function ExamLibrary() {
               exam={exam}
               onDelete={handleDelete}
               onResume={handleResume}
+              onRename={handleRename}
             />
           ))}
         </div>

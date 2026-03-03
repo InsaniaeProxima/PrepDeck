@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { loadExam, deleteExam, removeExamMeta } from "@/lib/storage/json-storage";
+import { loadExam, deleteExam, removeExamMeta, updateExamCustomName } from "@/lib/storage/json-storage";
 
 export async function GET(
   _req: NextRequest,
@@ -9,6 +9,19 @@ export async function GET(
   const exam = await loadExam(id);
   if (!exam) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(exam);
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const body = await req.json();
+  if (typeof body.customName !== "string") {
+    return NextResponse.json({ error: "customName must be a string" }, { status: 400 });
+  }
+  await updateExamCustomName(id, body.customName.trim());
+  return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(
