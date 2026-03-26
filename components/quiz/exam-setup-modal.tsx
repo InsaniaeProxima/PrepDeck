@@ -23,7 +23,7 @@ import {
   AccordionContent,
 } from "@/components/ui/accordion";
 import { cn } from "@/lib/utils";
-import { UNIVERSAL_DOMAINS } from "@/lib/categorizer";
+import { categorizeQuestion, UNIVERSAL_DOMAINS } from "@/lib/categorizer";
 import type { SessionConfig, SessionFilter, ScoringFormat, Exam } from "@/lib/types";
 
 interface ExamSetupModalProps {
@@ -135,9 +135,8 @@ export function ExamSetupModal({
   const domainCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const q of exam?.questions ?? []) {
-      if (q.domain) {
-        counts[q.domain] = (counts[q.domain] ?? 0) + 1;
-      }
+      const domain = q.domain || categorizeQuestion(q.body, q.answerDescription, q.options);
+      counts[domain] = (counts[domain] ?? 0) + 1;
     }
     return counts;
   }, [exam?.questions]);
