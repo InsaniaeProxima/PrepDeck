@@ -3,14 +3,16 @@
 import React from "react";
 import { Award, Clock, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { ScoringFormat } from "@/lib/types";
 
 interface ExamSummaryOverlayProps {
   score: {
     correct: number;
     total: number;
-    percent: number;
+    displayScore: string;
     passed: boolean;
   };
+  scoringFormat: ScoringFormat;
   secondsUsed: number;
   onReview: () => void;
 }
@@ -24,6 +26,7 @@ function formatTime(totalSeconds: number): string {
 
 export function ExamSummaryOverlay({
   score,
+  scoringFormat,
   secondsUsed,
   onReview,
 }: ExamSummaryOverlayProps) {
@@ -43,18 +46,29 @@ export function ExamSummaryOverlay({
           )}
         </div>
 
-        {/* Pass/Fail Label */}
+        {/* Pass/Fail heading — for PASS_FAIL format show the displayScore ("PASS"/"FAIL") */}
         <h2
           className={`mb-1 text-center text-2xl font-bold ${
             score.passed ? "text-emerald-400" : "text-red-400"
           }`}
         >
-          {score.passed ? "PASSED" : "FAILED"}
+          {scoringFormat === "PASS_FAIL" ? score.displayScore : score.passed ? "PASSED" : "FAILED"}
         </h2>
 
-        {/* Score */}
-        <p className="mb-4 text-center text-lg text-foreground">
-          {score.correct} / {score.total} correct ({score.percent}%)
+        {/* Score line — format-aware */}
+        {scoringFormat === "SCALED" && (
+          <p className="mb-1 text-center text-lg text-foreground">
+            Score: {score.displayScore} / 1000
+          </p>
+        )}
+        {scoringFormat === "WEIGHTED" && (
+          <p className="mb-1 text-center text-lg text-foreground">
+            Score: {score.displayScore}
+          </p>
+        )}
+
+        <p className="mb-4 text-center text-sm text-muted-foreground">
+          {score.correct} of {score.total} questions correct
         </p>
 
         {/* Details */}
@@ -68,10 +82,18 @@ export function ExamSummaryOverlay({
               {formatTime(secondsUsed)}
             </span>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Pass Threshold</span>
-            <span className="font-medium text-foreground">82%</span>
-          </div>
+          {scoringFormat === "SCALED" && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Pass Threshold</span>
+              <span className="font-medium text-foreground">720 / 1000</span>
+            </div>
+          )}
+          {scoringFormat === "WEIGHTED" && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Pass Threshold</span>
+              <span className="font-medium text-foreground">66%</span>
+            </div>
+          )}
         </div>
 
         {/* Review Button */}

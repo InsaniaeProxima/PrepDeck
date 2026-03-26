@@ -5,7 +5,8 @@ import { useShallow } from "zustand/react/shallow";
 import { shuffle, isCorrect, parseAnswerLetters } from "@/lib/utils";
 import { applyRating } from "@/lib/srs";
 import type { SRSRating } from "@/lib/srs";
-import type { Exam, Question, SessionConfig, ExamProgress, SRSCard } from "@/lib/types";
+import { categorizeQuestion } from "@/lib/categorizer";
+import type { Exam, Question, SessionConfig, ExamProgress, SRSCard, ScoringFormat } from "@/lib/types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,13 +32,16 @@ interface QuizState {
 
   // ── Exam Mode ──────────────────────────────────────────────────────────────
   isExamMode: boolean;
+  isQuizMode: boolean;
   examSubmitted: boolean;
   examSecondsRemaining: number;
   examStartedAt: number | null;
+  scoringFormat: ScoringFormat;
+  eslAccommodation: boolean;
   examScore: {
     correct: number;
     total: number;
-    percent: number;
+    displayScore: string;
     passed: boolean;
   } | null;
 
@@ -50,6 +54,10 @@ interface QuizState {
   // ── Notes ─────────────────────────────────────────────────────────────────
   /** User-authored notes keyed by exam question index */
   notes: Record<number, string>;
+
+  // ── Mastery ───────────────────────────────────────────────────────────────
+  /** Consecutive correct answer count keyed by exam question index */
+  masteryHistory: Record<number, number>;
 
   // ── Actions ────────────────────────────────────────────────────────────────
   loadExam: (exam: Exam, progress: ExamProgress | null) => void;
@@ -77,7 +85,9 @@ function buildSession(
   config: SessionConfig,
   userAnswers: Map<number, string>,
   flaggedSet: Set<number>,
-  srsData: Record<number, SRSCard>
+  srsData: Record<number, SRSCard>,
+  masteryHistory: Record<number, number>,
+  hideMastered: boolean
 ): Question[] {
   // 1. Filter
   let pool = questions.map((q, i) => ({ q, i }));
@@ -102,6 +112,20 @@ function buildSession(
     });
   }
 
+  // 1.5 Domain filter
+  if (config.selectedDomains.length > 0) {
+    const domainSet = new Set(config.selectedDomains);
+    pool = pool.filter(({ q }) => {
+      const domain = q.domain ?? categorizeQuestion(q.body, q.answerDescription, q.options);
+      return domainSet.has(domain);
+    });
+  }
+
+  // 1.7 Exclude mastered questions
+  if (hideMastered) {
+    pool = pool.filter(({ i }) => (masteryHistory[i] ?? 0) < 3);
+  }
+
   // 2. Sort by topic then index (only when not randomizing)
   if (!config.randomize) {
     pool.sort((a, b) => {
@@ -123,6 +147,41 @@ function buildSession(
   return pool.map(({ q }) => q);
 }
 
+// ─── Scoring ────────────────────────────────────────────────────────────────────
+
+function computeExamResult(
+  correct: number,
+  total: number,
+  format: ScoringFormat
+): { correct: number; total: number; displayScore: string; passed: boolean } {
+  if (total === 0) return { correct: 0, total: 0, displayScore: "0", passed: false };
+
+  if (format === "SCALED") {
+    const score = 100 + Math.round((correct / total) * 900);
+    return { correct, total, displayScore: String(score), passed: score >= 720 };
+  }
+  if (format === "PASS_FAIL") {
+    const percent = Math.round((correct / total) * 100);
+    const passed = percent >= 70;
+    return { correct, total, displayScore: passed ? "PASS" : "FAIL", passed };
+  }
+  // WEIGHTED
+  const percent = Math.round((correct / total) * 100);
+  return { correct, total, displayScore: `${percent}%`, passed: percent >= 66 };
+}
+
+function updateMasteryForQuestion(
+  masteryHistory: Record<number, number>,
+  examIdx: number,
+  wasCorrect: boolean
+): Record<number, number> {
+  const current = masteryHistory[examIdx] ?? 0;
+  return {
+    ...masteryHistory,
+    [examIdx]: wasCorrect ? current + 1 : 0,
+  };
+}
+
 // ─── Store ─────────────────────────────────────────────────────────────────────
 
 export const useQuizStore = create<QuizState>((set, get) => ({
@@ -138,9 +197,12 @@ export const useQuizStore = create<QuizState>((set, get) => ({
 
   // ── Exam mode initial state ─────────────────────────────────────────────────
   isExamMode: false,
+  isQuizMode: false,
   examSubmitted: false,
   examSecondsRemaining: 0,
   examStartedAt: null,
+  scoringFormat: "SCALED" as ScoringFormat,
+  eslAccommodation: false,
   examScore: null,
 
   // ── SRS initial state ───────────────────────────────────────────────────────
@@ -149,6 +211,9 @@ export const useQuizStore = create<QuizState>((set, get) => ({
 
   // ── Notes initial state ─────────────────────────────────────────────────────
   notes: {},
+
+  // ── Mastery initial state ────────────────────────────────────────────────────
+  masteryHistory: {},
 
   loadExam(exam, progress) {
     const userAnswers = new Map<number, string>(
@@ -160,12 +225,14 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     const flagged = new Set<number>(progress?.flagged ?? []);
     const srsData: Record<number, SRSCard> = progress?.srs ?? {};
     const notes: Record<number, string> = progress?.notes ?? {};
+    const masteryHistory: Record<number, number> = progress?.masteryHistory ?? {};
     set({
       exam,
       userAnswers,
       flagged,
       srsData,
       notes,
+      masteryHistory,
       sessionIndex: 0,
       savedSessionIndex: progress?.lastSessionIndex ?? 0,
       revealed: new Set(),
@@ -177,7 +244,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   },
 
   startSession(config) {
-    const { exam, userAnswers, flagged, srsData } = get();
+    const { exam, userAnswers, flagged, srsData, masteryHistory } = get();
     if (!exam) return;
 
     const sessionQuestions = buildSession(
@@ -185,7 +252,9 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       config,
       userAnswers,
       flagged,
-      srsData
+      srsData,
+      masteryHistory,
+      config.hideMastered
     );
 
     set({
@@ -197,9 +266,12 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       srsRatedThisReveal: new Set(),
       // ── Exam mode initialization ──
       isExamMode: config.isExamMode,
+      isQuizMode: config.isQuizMode,
       examSubmitted: false,
       examSecondsRemaining: config.isExamMode ? config.examDurationSeconds : 0,
       examStartedAt: config.isExamMode ? Date.now() : null,
+      scoringFormat: config.scoringFormat,
+      eslAccommodation: config.eslAccommodation,
       examScore: null,
     });
   },
@@ -215,6 +287,11 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       count: "all",
       isExamMode: false,
       examDurationSeconds: 0,
+      scoringFormat: "SCALED",
+      eslAccommodation: false,
+      isQuizMode: false,
+      selectedDomains: [],
+      hideMastered: false,
     });
     set({ sessionIndex: savedSessionIndex });
   },
@@ -249,6 +326,35 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       }
       return { userAnswers: m };
     });
+
+    // Auto-reveal in Quiz Mode
+    const { isQuizMode, sessionIndex: idx, sessionQuestions: qs } = get();
+    if (isQuizMode) {
+      const q = qs[idx];
+      if (q) {
+        const expectedCount = parseAnswerLetters(q.answer).length;
+        const currentAnswer = get().userAnswers.get(
+          get().exam!.questions.indexOf(q)
+        );
+        const selectedCount = parseAnswerLetters(currentAnswer ?? "").length;
+        if (selectedCount >= expectedCount) {
+          set((s) => {
+            const r = new Set(s.revealed);
+            r.add(s.sessionIndex);
+            return { revealed: r };
+          });
+
+          // Update mastery on quiz-mode auto-reveal
+          const { exam: e2, masteryHistory: mh2, userAnswers: ua2 } = get();
+          if (e2 && q) {
+            const chosen2 = ua2.get(examIdx);
+            if (chosen2 !== undefined) {
+              set({ masteryHistory: updateMasteryForQuestion(mh2, examIdx, isCorrect(q, chosen2)) });
+            }
+          }
+        }
+      }
+    }
   },
 
   revealAnswer() {
@@ -261,6 +367,19 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       r.add(sessionIndex);
       return { revealed: r };
     });
+
+    // Update mastery on reveal
+    const { exam: e, sessionQuestions: qs, sessionIndex: idx, userAnswers: ua, masteryHistory: mh } = get();
+    if (e) {
+      const q = qs[idx];
+      if (q) {
+        const examIdx = e.questions.indexOf(q);
+        const chosen = ua.get(examIdx);
+        if (chosen !== undefined) {
+          set({ masteryHistory: updateMasteryForQuestion(mh, examIdx, isCorrect(q, chosen)) });
+        }
+      }
+    }
   },
 
   toggleFlag() {
@@ -305,7 +424,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     // Read all required state in a single get() call so the snapshot is
     // consistent — avoids a second get() that could observe a different
     // sessionIndex if state mutated between calls.
-    const { exam, userAnswers, flagged, sessionIndex, notes } = get();
+    const { exam, userAnswers, flagged, sessionIndex, notes, masteryHistory } = get();
     if (!exam) return;
 
     const body = {
@@ -317,6 +436,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       // never races against updateNote's fire-and-forget PUT and silently
       // drops notes via the server-side fallback to the stale on-disk value.
       notes,
+      masteryHistory,
     };
 
     const res = await fetch(`/api/progress/${exam.id}`, {
@@ -379,8 +499,8 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       }
     });
 
-    const percent = total > 0 ? Math.round((correct / total) * 100) : 0;
-    const passed = percent >= 82;
+    const { scoringFormat } = get();
+    const examScore = computeExamResult(correct, total, scoringFormat);
 
     // Reveal ALL session questions at once for review mode
     const allRevealed = new Set<number>();
@@ -390,7 +510,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
 
     set({
       examSubmitted: true,
-      examScore: { correct, total, percent, passed },
+      examScore,
       revealed: allRevealed,
     });
 
@@ -427,15 +547,20 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       active: false,
       // ── Exam mode reset ──
       isExamMode: false,
+      isQuizMode: false,
       examSubmitted: false,
       examSecondsRemaining: 0,
       examStartedAt: null,
+      scoringFormat: "SCALED" as ScoringFormat,
+      eslAccommodation: false,
       examScore: null,
       // ── SRS reset ──
       srsData: {},
       srsRatedThisReveal: new Set(),
       // ── Notes reset ──
       notes: {},
+      // ── Mastery reset ──
+      masteryHistory: {},
     });
   },
 
@@ -450,6 +575,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
         flagged: [...state.flagged],
         lastSessionIndex: state.sessionIndex,
         notes: { ...state.notes, [questionIndex]: text },
+        masteryHistory: state.masteryHistory,
       }),
     }).catch(console.error);
   },
@@ -498,6 +624,8 @@ export const useExamMode = () =>
       examSubmitted: s.examSubmitted,
       examSecondsRemaining: s.examSecondsRemaining,
       examStartedAt: s.examStartedAt,
+      scoringFormat: s.scoringFormat,
+      eslAccommodation: s.eslAccommodation,
       examScore: s.examScore,
     }))
   );
@@ -512,3 +640,5 @@ export const useSRSCard = () =>
 
 export const useSRSRated = () =>
   useQuizStore((s) => s.srsRatedThisReveal.has(s.sessionIndex));
+
+export const useQuizMode = () => useQuizStore((s) => s.isQuizMode);

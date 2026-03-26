@@ -43,6 +43,7 @@ import {
   useUserAnswer,
   useIsFlagged,
   useExamMode,
+  useQuizMode,
   useSRSCard,
   useSRSRated,
 } from "@/lib/store/quiz-store";
@@ -160,6 +161,7 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
   const userAnswer = useUserAnswer();
   const isFlagged = useIsFlagged();
   const examMode = useExamMode();
+  const isQuizMode = useQuizMode();
 
   const srsCard = useSRSCard();
   const srsRated = useSRSRated();
@@ -293,6 +295,11 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
                   >
                     {formatTime(examMode.examSecondsRemaining)}
                   </span>
+                  {examMode.eslAccommodation && (
+                    <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                      🌐 +30 min
+                    </span>
+                  )}
                 </div>
                 <Button
                   size="sm"
@@ -428,8 +435,8 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
                 <TooltipContent>Save progress</TooltipContent>
               </Tooltip>
 
-              {/* Hide reveal button during active exam */}
-              {!(examMode.isExamMode && !examMode.examSubmitted) && (
+              {/* Hide reveal button during active exam or quiz mode */}
+              {!(examMode.isExamMode && !examMode.examSubmitted) && !isQuizMode && (
                 <Button
                   size="sm"
                   variant={isRevealed ? "secondary" : "default"}
@@ -463,19 +470,21 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
           <p className="text-center text-xs text-muted-foreground/50">
             {examMode.isExamMode && !examMode.examSubmitted
               ? "arrows navigate, A-E or 1-5 select, F flag"
+              : isQuizMode
+              ? "← → navigate · A–E or 1–5 select · F flag"
               : "← → navigate · A–E or 1–5 select · R reveal · F flag"}
           </p>
 
-          {/* ── Discussions — hidden during active exam ── */}
-          {!(examMode.isExamMode && !examMode.examSubmitted) && (
+          {/* ── Discussions — hidden during active exam or quiz mode ── */}
+          {!(examMode.isExamMode && !examMode.examSubmitted) && !isQuizMode && (
             <>
               <Separator />
               <DiscussionPanel comments={currentQ.comments} />
             </>
           )}
 
-          {/* ── My Notes — hidden during active exam ── */}
-          {!(examMode.isExamMode && !examMode.examSubmitted) && (() => {
+          {/* ── My Notes — hidden during active exam or quiz mode ── */}
+          {!(examMode.isExamMode && !examMode.examSubmitted) && !isQuizMode && (() => {
             const currentExamIdx = exam.questions.indexOf(currentQ);
             return (
               <div className="mt-4 space-y-2">
@@ -490,8 +499,8 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
             );
           })()}
 
-          {/* ── Analytics (weak topics) — hidden during active exam ── */}
-          {!(examMode.isExamMode && !examMode.examSubmitted) && (
+          {/* ── Analytics (weak topics) — hidden during active exam or quiz mode ── */}
+          {!(examMode.isExamMode && !examMode.examSubmitted) && !isQuizMode && (
             <div>
               <button
                 className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -536,6 +545,7 @@ export function QuizPlayer({ exam, progress }: QuizPlayerProps) {
       {showExamSummary && examMode.examScore && examMode.examStartedAt && (
         <ExamSummaryOverlay
           score={examMode.examScore}
+          scoringFormat={examMode.scoringFormat}
           secondsUsed={Math.round((Date.now() - examMode.examStartedAt) / 1000)}
           onReview={() => setShowExamSummary(false)}
         />

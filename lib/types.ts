@@ -25,6 +25,7 @@ export type Question = {
   imageUrl?: string;
   notes?: string;
   marked?: boolean;
+  domain?: string;
 };
 
 // ─── Exam (persisted to data/exams/{id}.json) ─────────────────────────────────
@@ -104,10 +105,13 @@ export type ExamProgress = {
   srs?: Record<number, SRSCard>;
   /** User-authored notes, keyed by question index */
   notes?: Record<number, string>;
+  masteryHistory?: Record<number, number>;
 };
 
 // ─── Session config (transient, Zustand) ──────────────────────────────────────
 export type SessionFilter = "all" | "mistakes" | "flagged" | "srs_due";
+
+export type ScoringFormat = "SCALED" | "PASS_FAIL" | "WEIGHTED";
 
 export type SessionConfig = {
   count: number | "all";
@@ -115,6 +119,11 @@ export type SessionConfig = {
   filter: SessionFilter;
   isExamMode: boolean;
   examDurationSeconds: number;
+  scoringFormat: ScoringFormat;
+  eslAccommodation: boolean;
+  isQuizMode: boolean;
+  selectedDomains: string[];
+  hideMastered: boolean;
 };
 
 // ─── SSE events emitted by the scraper API ────────────────────────────────────
