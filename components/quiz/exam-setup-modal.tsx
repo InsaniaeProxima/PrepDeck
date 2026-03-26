@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { BookOpen, Clock, Flame, Flag, RefreshCw, Shuffle, Zap } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -132,6 +132,16 @@ export function ExamSetupModal({
     );
   };
 
+  const domainCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const q of exam?.questions ?? []) {
+      if (q.domain) {
+        counts[q.domain] = (counts[q.domain] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [exam?.questions]);
+
   if (!exam) return null;
 
   const poolSize =
@@ -213,7 +223,7 @@ export function ExamSetupModal({
                     : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
                 )}
               >
-                {domain.label}
+                {domain.label} ({domainCounts[domain.id] ?? 0})
               </button>
             ))}
           </div>
